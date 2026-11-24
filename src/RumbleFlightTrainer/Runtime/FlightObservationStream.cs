@@ -6,6 +6,7 @@ internal sealed class FlightObservationStream
 {
     private readonly Stopwatch clock = Stopwatch.StartNew();
     private readonly FlightBreakTimeline breakTimeline;
+    private readonly Queue<GameplayObservation> pendingBreaks = new();
     private PhysicsSample? previousStep;
     private long sequence;
     private long tick;
@@ -25,6 +26,7 @@ internal sealed class FlightObservationStream
 
     public void CapturePhysics(int frame, PhysicsState state, StructureFrame? structures = null)
     {
+        FlushBreaks();
         string? transition = null;
         double? timeSincePrevious = null;
         if (previousStep is { Physics: var previous })
@@ -60,11 +62,31 @@ internal sealed class FlightObservationStream
     public void DropStructureImpact(int frame, string source, StructureKey? structure, StructureKey? otherStructure = null) =>
         Publish(new StructureImpactGap(NextStamp(frame), source, structure, otherStructure));
 
-    public void CaptureGameplay(int frame, GameplayObservation observation) =>
-        Publish(observation with { Stamp = NextStamp(frame), LastPhysicsTick = LastPhysicsTick });
+    public void CaptureGameplay(int frame, GameplayObservation observation)
+    {
+        observation = observation with { Stamp = NextStamp(frame), LastPhysicsTick = LastPhysicsTick };
+        if (observation.Event == "structure_destroyed")
+            pendingBreaks.Enqueue(observation);
+        else
+            Publish(observation);
+    }
+
+    public void FlushBreaks()
+    {
+        // Contact and combat callbacks for the destruction step can follow the destruction event.
+        while (pendingBreaks.TryDequeue(out var destruction))
+            Publish(destruction);
+    }
+
+    public void CaptureCombatHealth(int frame, StructureKey structure, string kind, int timestamp, short before, short after) =>
+        Publish(new CombatHealthObservation(NextStamp(frame), LastPhysicsTick, structure, kind, timestamp, before, after));
+
+    public void StartIronBootsContact(int frame) =>
+        Publish(new IronBootsContactStarted(NextStamp(frame)));
 
     public void StartSegment(int frame, string source, string reason)
     {
+        pendingBreaks.Clear();
         Segment++;
         previousStep = null;
         Publish(new TraceEvent(NextStamp(frame), "segment_started", source, null, reason));

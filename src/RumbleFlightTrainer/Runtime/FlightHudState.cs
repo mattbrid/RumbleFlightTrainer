@@ -49,13 +49,14 @@ internal sealed record FlightHudFrame(
     {
         var match = item.Analysis?.Match;
         if (match?.IronBoots is { } boots)
-            return boots.IsLowRelativeSpeed
+            return boots.IsLowRelativeSpeed || match.PlayerDamage == 0
                 ? FormattableString.Invariant($"Structure Broke · Iron Boots ({boots.Alignment.AngleDegrees:F0}°)")
-                : FormattableString.Invariant($"Structure Broke · Iron Boots? ({boots.Alignment.AngleDegrees:F0}°|{boots.RelativeLinearSpeed:F1}m/s)");
+                : FormattableString.Invariant($"Structure Broke · Iron Boots? ({boots.Alignment.AngleDegrees:F0}°)");
 
         string cause = match?.Event switch
         {
             "player_hit" or "player_hit_from_beneath" => "hit you",
+            "jump_on_structure" when match.PlayerDamage is > 0 => "hit you",
             "jump_on_structure" => "jump contact",
             "structure_collision" => $"hit {match.CounterpartName ?? "another structure"}",
             "environment_collision" => $"hit {match.Environment}",

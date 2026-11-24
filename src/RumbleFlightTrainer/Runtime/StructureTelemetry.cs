@@ -68,13 +68,14 @@ internal sealed partial class StructureTelemetry : IDisposable
 
 
     public StructureTelemetry(FlightObservationStream session, PlayerController controller, Rigidbody body,
-        MelonLogger.Instance logger, bool ironBootsEnabled)
+        MelonLogger.Instance logger, bool ironBootsEnabled, float ironBootsVerticalVelocityThreshold)
     {
         this.session = session;
         this.controller = controller;
         this.body = body;
         this.logger = logger;
         this.ironBootsEnabled = ironBootsEnabled;
+        ironBootsGate = new IronBootsContactGate(ironBootsVerticalVelocityThreshold);
         actor = controller.ActorNo;
         var physics = controller.PlayerPhysics;
         var foot = physics.FootCollider;
@@ -100,6 +101,7 @@ internal sealed partial class StructureTelemetry : IDisposable
     public StructureFrame Sample(long tick, PhysicsState playerState, double playerSampleSeconds)
     {
         impulsesThisTick.Clear();
+        SampleIronBootsVelocity(tick);
         RefreshCombatSource();
         ExpireInvalidContacts();
         // Touching bodies and active/recent local candidates share this capped set.
@@ -232,7 +234,7 @@ internal sealed partial class StructureTelemetry : IDisposable
             observation = CaptureContactDetails(observation with { RelativeLinearVelocity = TryCollisionLinearVelocity(collision) },
                 entry, own, other, otherBody, observedAt);
         contacts[key] = new ActiveContact(own, other, observation);
-        if (ironBootsEnabled && tick is { } contactTick)
+        if (tick is { } contactTick)
             SampleIronBoots(contactTick, observedAt, observation, entry, own, other);
         session.CaptureContact(Time.frameCount, observation);
     }
@@ -365,6 +367,8 @@ internal sealed partial class StructureTelemetry : IDisposable
     public void ResetContacts()
     {
         ironBootsTarget = null;
+        ironBootsGate.Reset();
+        ironBootsPreSolve = null;
         CloseContacts(null, "coordinate_segment_changed");
         nearby.Clear();
         sampledKeys.Clear();
@@ -402,13 +406,16 @@ internal sealed partial class StructureTelemetry : IDisposable
                 EndContact(pair.Last, "interrupted", reason);
     }
 
-    private void EndContact(ContactObservation last, string phase, string? reason) =>
+    private void EndContact(ContactObservation last, string phase, string? reason)
+    {
+        ironBootsGate.End(last.Pair);
         session.CaptureContact(Time.frameCount, last with
         {
             Phase = phase, PairImpulseRaw = null, PlayerIsSecondInNativePair = null,
             StructureAtFixedSample = null, Impact = null, RelativeLinearVelocity = null, Reason = reason,
             ObservedFixedGameTimeSeconds = Time.inFixedTimeStep ? Time.fixedTimeAsDouble : null
         });
+    }
 
     private void Forget(StructureKey key)
     {

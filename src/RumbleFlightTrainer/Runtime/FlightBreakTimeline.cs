@@ -12,6 +12,7 @@ internal sealed class FlightBreakTimeline
     private readonly bool probesAvailable;
     private readonly Queue<TraceRecord> history = new();
     private int? segment;
+    private long ironBootsContactSequence;
     private double droppedThrough = double.NegativeInfinity;
 
     public FlightBreakTimeline(CaptureMetadata capture)
@@ -26,25 +27,28 @@ internal sealed class FlightBreakTimeline
         {
             segment = record.Stamp.Segment;
             history.Clear();
+            ironBootsContactSequence = 0;
             droppedThrough = double.NegativeInfinity;
         }
+
+        if (record is IronBootsContactStarted start)
+            ironBootsContactSequence = start.Stamp.Sequence;
 
         double oldest = record.Stamp.TimeSeconds - MatchSeconds;
         while (history.TryPeek(out var first) && first.Stamp.TimeSeconds < oldest)
             history.Dequeue();
 
+        if (record is GameplayObservation { Event: "structure_destroyed", Structure: { } key } end)
+            return Explain(end, key, oldest);
+
         if (record is PhysicsSample or ContactObservation { Structure: not null } or
-            StructureImpactObservation or StructureImpactGap ||
+            StructureImpactObservation or StructureImpactGap or CombatHealthObservation ||
             record is GameplayObservation { Event: "player_hit" or "player_hit_from_beneath" or "jump_on_structure" or
-                "structure_collision" or "structure_kill_requested" or "structure_pool_return" or "structure_destroyed" })
+                "structure_collision" or "structure_kill_requested" or "structure_pool_return" })
         {
-            var analysis = record is GameplayObservation { Event: "structure_destroyed", Structure: { } key } end
-                ? Explain(end, key, oldest)
-                : null;
             if (history.Count == MaxObservations)
                 droppedThrough = history.Dequeue().Stamp.TimeSeconds;
             history.Enqueue(record);
-            return analysis;
         }
         return null;
     }
@@ -83,6 +87,8 @@ internal sealed class FlightBreakTimeline
         BreakImpact? impact = null;
         float? linearSpeed = null;
         IronBootsBreakEvidence? ironBoots = null;
+        IronBootsApproach? jumpDiagram = null;
+        int? playerDamage = null;
         if (combat.LastPhysicsTick is { } tick)
         {
             if (structurePair)
@@ -100,6 +106,10 @@ internal sealed class FlightBreakTimeline
             }
             else
             {
+                if (combat.CombatTimestamp is { } timestamp)
+                    playerDamage = history.OfType<CombatHealthObservation>().Where(row =>
+                            row.Structure == key && row.Event == combat.Event && row.Tick == tick && row.CombatTimestamp == timestamp)
+                        .Select(row => row.Damage).Max();
                 var contact = MatchPlayerContact(key, tick);
                 impact = contact is null ? null : PlayerImpact(contact, tick);
                 if (contact?.Impact?.Second?.Sample.Frozen != true)
@@ -112,14 +122,19 @@ internal sealed class FlightBreakTimeline
                         linearSpeed ??= FiniteSpeed(FlightContactPatches.Vector(snapshots.FirstStructure.Positional) -
                             FlightContactPatches.Vector(player));
                 }
-                if (combat.Event == "jump_on_structure" && combat.Structure == key && tick == impactTick &&
-                    combat.IronBoots is { MatchesDirection: true } evidence)
-                    ironBoots = evidence;
+                if (combat.Event == "jump_on_structure" && playerDamage is not > 0 && combat.Structure == key && tick == impactTick &&
+                    combat.Stamp.Sequence > ironBootsContactSequence)
+                {
+                    if (combat.IronBoots is { MatchesDirection: true } evidence)
+                        ironBoots = evidence;
+                    jumpDiagram = combat.JumpDiagram;
+                }
             }
         }
         return new BreakCandidate(combat.Stamp, combat.LastPhysicsTick, combat.Event, combat.Actor,
             structurePair ? counterpart : null, structurePair ? (breakingFirst ? combat.Detail : combat.StructureName) : null,
-            combat.CombatTimestamp, combat.Combat, impact, linearSpeed, IronBoots: ironBoots);
+            combat.CombatTimestamp, combat.Combat, impact, linearSpeed, IronBoots: ironBoots, JumpDiagram: jumpDiagram,
+            PlayerDamage: playerDamage);
     }
 
     private ContactObservation? MatchPlayerContact(StructureKey key, long tick)

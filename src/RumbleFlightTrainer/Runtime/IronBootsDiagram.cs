@@ -16,7 +16,9 @@ internal sealed record IronBootsDiagram(Vector3 PlaneNormal, Vector2[] Section, 
         if (FlightBoxPreview.Build(approach.Tick, approach.Box.Shape, approach.Box.Frame) is not { } box)
             return null;
 
-        var cutPoint = approach.Contact is { } contact ? box.NearestSurfacePoint(Vector(contact.PointWorld)) : approach.Feet;
+        bool surfaceContact = approach.Contact is not null || approach.EstimatedContact;
+        var anchor = approach.Contact is { } contact ? Vector(contact.PointWorld) : approach.Feet;
+        var cutPoint = surfaceContact ? box.NearestSurfacePoint(anchor) : anchor;
         var velocity = Unit(approach.VrVelocity);
         var toOrigin = approach.StructureOrigin - approach.Feet;
         var originAxis = Unit(toOrigin);
@@ -25,7 +27,7 @@ internal sealed record IronBootsDiagram(Vector3 PlaneNormal, Vector2[] Section, 
         var normal = Plane(velocity, originAxis, previousPlaneNormal);
         var section = Slice(normal, out var right, out var up);
         bool drawMotion = velocity != Vector3.Zero;
-        if (section.Count < 3 || approach.Contact is not null && !ContactOnBoundary(section))
+        if (section.Count < 3 || surfaceContact && !ContactOnBoundary(section))
         {
             // If the angle plane only grazes the collider, use an inward section for contact inspection.
             normal = Plane(velocity, Unit(box.Center - cutPoint), previousPlaneNormal);

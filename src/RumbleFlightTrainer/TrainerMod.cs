@@ -17,6 +17,7 @@ public sealed class TrainerMod : MelonMod
     private const double StartupDelaySeconds = 3;
 
     private bool hudRequested;
+    private float ironBootsVerticalVelocityThreshold;
     private System.Numerics.Vector3 hudOffset;
     private Scene? activeMap;
     private double? mapReadySince;
@@ -30,6 +31,10 @@ public sealed class TrainerMod : MelonMod
         var preferences = MelonPreferences.CreateCategory("RumbleFlightTrainer");
         hudRequested = preferences.CreateEntry("HudEnabledOnStartup", true,
             description: "Enable the flight HUD in Gym and Park on startup. F8 toggles it for the current session.").Value;
+        float threshold = preferences.CreateEntry("IronBootsVerticalVelocityThreshold",
+            IronBootsContactGate.DefaultVerticalVelocityThreshold,
+            description: "Show Iron Boots feedback during foot contact while the VR body's vertical velocity in m/s is below this value. Negative means downward.").Value;
+        ironBootsVerticalVelocityThreshold = float.IsFinite(threshold) ? threshold : IronBootsContactGate.DefaultVerticalVelocityThreshold;
         hudOffset = new(
             ReadOffset("HudOffsetX", "Move the HUD right by this many metres. Use a negative value to move left."),
             ReadOffset("HudOffsetY", "Move the HUD up by this many metres. Use a negative value to move down."),
@@ -166,7 +171,7 @@ public sealed class TrainerMod : MelonMod
 
     private void TryEnable(Scene map)
     {
-        var active = TryOpenTrainer(map, LoggerInstance);
+        var active = TryOpenTrainer(map, LoggerInstance, ironBootsVerticalVelocityThreshold);
         if (active is null)
             return;
 

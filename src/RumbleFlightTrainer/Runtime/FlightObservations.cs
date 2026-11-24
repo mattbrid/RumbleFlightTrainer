@@ -97,27 +97,59 @@ internal sealed record GameplayObservation(
     StructureKey? Structure = null, string? StructureName = null, StructureKey? OtherStructure = null,
     string? Detail = null, long? CombatTimestamp = null,
     CombatMeasurement? Combat = null, BreakAnalysis? Break = null, long? CollisionSequence = null,
-    IronBootsBreakEvidence? IronBoots = null) : TraceRecord(Stamp);
+    IronBootsBreakEvidence? IronBoots = null, IronBootsApproach? JumpDiagram = null) : TraceRecord(Stamp);
 
 internal sealed record CombatVelocity(Vec3 Positional, Vec3 Angular);
 internal sealed record CombatMeasurement(CombatVelocity FirstStructure, CombatVelocity? SecondStructure = null,
     Vec3? CollisionPoint = null, CombatVelocity? PlayerPhysicsBody = null, CombatVelocity? PlayerVrBody = null);
+internal sealed record CombatHealthObservation(TraceStamp Stamp, long? Tick, StructureKey Structure, string Event,
+    long CombatTimestamp, short Before, short After) : TraceRecord(Stamp)
+{
+    public int? Damage => After <= Before ? Before - After : null;
+}
 
 internal sealed record BreakAnalysis(
     TraceStamp? KillRequest, BreakCandidate[] Candidates, bool TimelineComplete,
     long? DirectCollisionSequence = null)
 {
-    public BreakCandidate? Match => DirectCollisionSequence is { } direct
-        ? Candidates.FirstOrDefault(candidate => candidate.Stamp.Sequence == direct)
-        : TimelineComplete && Candidates.Length == 1 &&
-          (Candidates[0].Actor.HasValue || Candidates[0].Counterpart.HasValue || Candidates[0].Environment is not null)
-            ? Candidates[0] : null;
+    public BreakCandidate? Match
+    {
+        get
+        {
+            if (DirectCollisionSequence is { } direct)
+                return Candidates.FirstOrDefault(candidate => candidate.Stamp.Sequence == direct);
+            if (!TimelineComplete)
+                return null;
+            if (Candidates.Length == 1)
+            {
+                var candidate = Candidates[0];
+                return candidate.Actor.HasValue || candidate.Counterpart.HasValue || candidate.Environment is not null
+                    ? candidate : null;
+            }
+
+            // A verified player hit can resolve competing jump evidence on the same structure.
+            BreakCandidate? damagingHit = null;
+            foreach (var candidate in Candidates)
+            {
+                if (candidate.Event is not ("jump_on_structure" or "player_hit" or "player_hit_from_beneath"))
+                    return null;
+                if (candidate.Event != "jump_on_structure" && candidate.PlayerDamage is > 0)
+                {
+                    if (damagingHit is not null)
+                        return null;
+                    damagingHit = candidate;
+                }
+            }
+            return damagingHit;
+        }
+    }
 }
 
 internal sealed record BreakCandidate(TraceStamp Stamp, long? Tick, string Event, short? Actor,
     StructureKey? Counterpart, string? CounterpartName, long? CombatTimestamp, CombatMeasurement? Combat,
     BreakImpact? Impact, float? LinearImpactMetersPerSecond = null, string? Environment = null,
-    IronBootsBreakEvidence? IronBoots = null);
+    IronBootsBreakEvidence? IronBoots = null, IronBootsApproach? JumpDiagram = null,
+    int? PlayerDamage = null);
 
 internal sealed record BreakImpact(TraceStamp Stamp, long Tick, string Phase, int BreakingBodyId, int? CounterpartBodyId,
     int ReportedPointCount, double? BreakingSampleAgeSeconds, double? CounterpartSampleAgeSeconds,
@@ -125,3 +157,4 @@ internal sealed record BreakImpact(TraceStamp Stamp, long Tick, string Phase, in
 internal sealed record ImpactSpeed(Vec3 PointWorld, float RelativeMetersPerSecond, float? ClosingMetersPerSecond);
 internal sealed record TraceEvent(
     TraceStamp Stamp, string Event, string Source, long? LastPhysicsTick, string? Reason = null) : TraceRecord(Stamp);
+internal sealed record IronBootsContactStarted(TraceStamp Stamp) : TraceRecord(Stamp);

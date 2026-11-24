@@ -5,8 +5,8 @@ namespace RumbleFlightTrainer;
 
 internal sealed partial class FlightHudView
 {
-    private static readonly Color AlignedAngle = new(0.62f, 1f, 0.81f);
-    private static readonly Color UnalignedAngle = new(1f, 0.62f, 0.48f);
+    private static readonly Color AlignedAngle = new(0.20f, 0.53f, 0.33f);
+    private static readonly Color UnalignedAngle = new(0.70f, 0.31f, 0.22f);
 
     private IronBootsPanel? ironBootsPanel;
     private IronBootsApproach? shownIronBoots;
@@ -61,6 +61,7 @@ internal sealed partial class FlightHudView
             SetDiagramDot(panel.Origin, diagram.Origin);
             SetDiagramDot(panel.Feet, diagram.Feet);
             panel.Contact.transform.localPosition = DiagramPoint(diagram.Contact);
+            panel.LastContact.text = approach.EstimatedContact ? "Last contact (estimated)" : "Last contact";
             SetDiagramPath(panel.Arc, diagram.Arc);
             panel.Arc.enabled = diagram.Arc.Length > 0 && approach.Alignment.HasValue;
 
@@ -106,10 +107,10 @@ internal sealed partial class FlightHudView
         var arc = Line(transform, "Approach angle arc", aligned, 0.0018f, DrawOrder.LiveFace);
 
         var angle = Label("Approach angle", 0.024f, 8f);
-        var last = Label("Last contact", 0.017f, 20f);
+        var last = Label("Last contact", 0.017f, 28f);
         last.transform.localPosition = new Vector3(0, 0.095f, -0.004f);
         last.text = "Last contact";
-        last.color = new Color(0.9f, 0.97f, 0.96f);
+        last.color = StatusTextColor;
         last.gameObject.SetActive(false);
         return new IronBootsPanel(panel, box, player, foot, velocity, arrowhead, ray, origin, feet, contact, arc,
             angle, last, aligned, unaligned);

@@ -19,6 +19,8 @@ internal sealed partial class FlightHudView : IDisposable
         new(0.47f, 0.95f, 0.92f)
     };
 
+    private static readonly Color StatusTextColor = new(0.16f, 0.23f, 0.25f);
+
     private readonly GameObject root = new("Flight Trainer HUD");
     private readonly List<Material> materials = new();
     private readonly Transform anchor;

@@ -152,6 +152,28 @@ internal sealed partial class StructureTelemetry
             RecordStructureCollision(collision, combat.Timestamp);
     }
 
+    internal sealed record CombatHealthSample(Player Player, StructureKey Structure, string Event,
+        int CombatTimestamp, short HealthBefore, int Segment);
+
+    public CombatHealthSample? BeginCombatHealth(Player? player, StructureSnapshot? snapshot, string kind, int timestamp)
+    {
+        if (disposed || player is null || player.Controller != controller || player.Data is not { } data ||
+            snapshot?.Structure is not { } structure || structure == null || Promote(structure) is not { Destroyed: false } entry)
+            return null;
+
+        return new CombatHealthSample(player, entry.Key, kind, timestamp, data.HealthPoints, session.Segment);
+    }
+
+    public void EndCombatHealth(CombatHealthSample before, bool completed)
+    {
+        if (disposed || before.Segment != session.Segment)
+            return;
+
+        if (completed && before.Player.Data is { } data)
+            session.CaptureCombatHealth(Time.frameCount, before.Structure, before.Event, before.CombatTimestamp,
+                before.HealthBefore, data.HealthPoints);
+    }
+
     private void RecordLocalCombat(string kind, Player? player, StructureSnapshot snapshot, int timestamp,
         CombatMeasurement? measurement = null, JumpOnStructureEvent? jump = null)
     {
@@ -164,12 +186,20 @@ internal sealed partial class StructureTelemetry
             knownKey = key;
 
         IronBootsBreakEvidence? ironBoots = null;
+        IronBootsApproach? jumpDiagram = null;
         if (jump is not null && measurement is not null && entry is not null && IsActive(entry))
         {
             try
             {
                 measurement = measurement with { PlayerVrBody = ReadCombatVelocity(jump.PlayerVRBodyVelocitySnapshot) };
-                ironBoots = MeasureIronBootsBreak(entry.Structure, measurement);
+            }
+            catch (Exception error)
+            {
+                ReportFailure("iron_boots_jump_velocity", error);
+            }
+            try
+            {
+                ironBoots = MeasureIronBootsBreak(entry, measurement, out jumpDiagram);
             }
             catch (Exception error)
             {
@@ -177,10 +207,12 @@ internal sealed partial class StructureTelemetry
             }
         }
 
+        measurement ??= new CombatMeasurement(ReadCombatVelocity(snapshot.Velocity));
+
         session.CaptureGameplay(Time.frameCount, new GameplayObservation(default, null, kind,
             "CombatManager.OnProcessCombatEvent", actor, knownKey,
             entry?.Name ?? snapshot.StructureName, CombatTimestamp: timestamp,
-            Combat: measurement ?? new CombatMeasurement(ReadCombatVelocity(snapshot.Velocity)), IronBoots: ironBoots));
+            Combat: measurement, IronBoots: ironBoots, JumpDiagram: jumpDiagram));
     }
 
     private void RecordStructureCollision(StructureCollisionEvent collision, int timestamp)

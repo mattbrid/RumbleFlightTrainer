@@ -27,7 +27,8 @@ internal sealed class FlightRuntime
     private bool originObserved;
     private string? pendingStop;
 
-    private FlightRuntime(Scene scene, PlayerController controller, PlayerMovement movement, Rigidbody body, MelonLogger.Instance logger)
+    private FlightRuntime(Scene scene, PlayerController controller, PlayerMovement movement, Rigidbody body,
+        MelonLogger.Instance logger, float ironBootsVerticalVelocityThreshold)
     {
         this.scene = scene;
         sceneExitReason = scene.name == Gym ? "left_active_gym" : "left_active_map";
@@ -47,7 +48,8 @@ internal sealed class FlightRuntime
                 hooks.StructureCollisionProbeInstalled, hooks.EnvironmentCollisionProbeInstalled);
             Observations = new FlightObservationStream(capture);
             Observations.ObservationCaptured += Publish;
-            Telemetry = new StructureTelemetry(Observations, controller, body, logger, scene.name == Gym);
+            Telemetry = new StructureTelemetry(Observations, controller, body, logger, scene.name == Gym,
+                ironBootsVerticalVelocityThreshold);
         }
         catch
         {
@@ -66,10 +68,10 @@ internal sealed class FlightRuntime
 
     public static bool IsTrainerMap(string name) => name is Gym or "Park";
 
-    public static FlightRuntime? TryOpenTrainer(Scene scene, MelonLogger.Instance logger) =>
-        IsTrainerMap(scene.name) ? TryOpen(scene, logger) : null;
+    public static FlightRuntime? TryOpenTrainer(Scene scene, MelonLogger.Instance logger, float ironBootsVerticalVelocityThreshold) =>
+        IsTrainerMap(scene.name) ? TryOpen(scene, logger, ironBootsVerticalVelocityThreshold) : null;
 
-    private static FlightRuntime? TryOpen(Scene scene, MelonLogger.Instance logger)
+    private static FlightRuntime? TryOpen(Scene scene, MelonLogger.Instance logger, float ironBootsVerticalVelocityThreshold)
     {
         if (current is { } existing)
         {
@@ -82,7 +84,7 @@ internal sealed class FlightRuntime
         var movement = controller?.PlayerMovement;
         var body = controller?.PlayerPhysics?.PhysicsRigidbody;
         return controller == null || movement == null || body == null ? null :
-            current = new FlightRuntime(scene, controller, movement, body, logger);
+            current = new FlightRuntime(scene, controller, movement, body, logger, ironBootsVerticalVelocityThreshold);
     }
 
     public void AttachTrainer(Action<TraceRecord> observe, Action<string> stop)
@@ -135,7 +137,8 @@ internal sealed class FlightRuntime
             ResetSegment(frame, "melon_late_update", "tracking_origin_instance_changed");
         originId = nextOriginId;
         originObserved = true;
-        return true;
+        Observations.FlushBreaks();
+        return current == this;
     }
 
     public void FixedUpdate()
@@ -151,6 +154,10 @@ internal sealed class FlightRuntime
                 pendingStop = active != scene ? sceneExitReason : "local_player_changed_or_unavailable";
                 return;
             }
+
+            Observations.FlushBreaks();
+            if (current != this)
+                return;
 
             int frame = Time.frameCount;
             double sampleSeconds = Observations.ElapsedSeconds;
@@ -199,6 +206,8 @@ internal sealed class FlightRuntime
     {
         try
         {
+            if (observation is GameplayObservation { Event: "structure_destroyed" } destruction && Telemetry is { } telemetry)
+                telemetry.Guard("iron_boots_break_diagram", () => telemetry.RetainIronBootsBreak(destruction));
             trainer?.Invoke(observation);
         }
         catch (Exception error)
