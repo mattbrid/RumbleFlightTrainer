@@ -124,7 +124,7 @@ internal sealed partial class FlightHudView : IDisposable
     public void Hide() => root.SetActive(false);
 
     public void Draw(Transform headset, FlightHudFrame frame, HudNearbyCollider? playerReference,
-        System.Numerics.Vector3 offset, IronBootsDisplay? ironBoots,
+        System.Numerics.Vector3 offset, System.Numerics.Vector3 ironBootsOffset, IronBootsDisplay? ironBoots,
         IReadOnlyDictionary<StructureKey, HudStructureVelocity>? velocities)
     {
         Vector3 forward = headset.forward;
@@ -141,8 +141,8 @@ internal sealed partial class FlightHudView : IDisposable
             hasViewYaw = true;
         }
 
-        Vector3 position = headset.position + forward * (0.84f + offset.Z) +
-            headset.up * (offset.Y - 0.23f) + headset.right * offset.X;
+        Vector3 defaultHudPosition = headset.position + forward * 0.84f - headset.up * 0.23f;
+        Vector3 position = defaultHudPosition + headset.right * offset.X + headset.up * offset.Y + forward * offset.Z;
         anchor.SetPositionAndRotation(position, viewYaw);
         Quaternion worldToView = Quaternion.Inverse(viewYaw);
         Quaternion bodyToView = worldToView * ToUnity(frame.BodyYaw);
@@ -161,7 +161,7 @@ internal sealed partial class FlightHudView : IDisposable
         status.color = outcome is not null ? OutcomeTextColor : StatusTextColor;
         if (!root.activeSelf)
             root.SetActive(true);
-        DrawIronBoots(headset, position, ironBoots);
+        DrawIronBoots(headset, defaultHudPosition, ironBootsOffset, ironBoots);
     }
 
     private void DrawImpulses(FlightHudFrame frame, Quaternion worldToView)

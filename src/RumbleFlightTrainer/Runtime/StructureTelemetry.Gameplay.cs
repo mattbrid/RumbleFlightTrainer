@@ -73,7 +73,8 @@ internal sealed partial class StructureTelemetry
             health = health.Outer;
         var destruction = new GameplayObservation(default, null, "structure_destroyed",
             "Structure.onStructureDestroyed", null, entry.Key, entry.Name,
-            CollisionSequence: DirectEnvironmentImpact(entry.Key), PlayerContactEstimate: health?.ContactEstimate);
+            CombatTimestamp: health?.CombatTimestamp, CollisionSequence: DirectEnvironmentImpact(entry.Key),
+            PlayerContactEstimate: health?.ContactEstimate, PlayerCombatEvent: health?.Event);
         session.CaptureGameplay(Time.frameCount, destruction);
         CloseContacts(entry.Key, "structure_destroyed");
     }

@@ -13,7 +13,7 @@ namespace RumbleFlightTrainer;
 
 public sealed class TrainerMod : MelonMod
 {
-    internal const string Version = "1.0.5";
+    internal const string Version = "1.1.0";
     private const double StartupDelaySeconds = 3;
 
     private bool hudRequested;
@@ -25,6 +25,7 @@ public sealed class TrainerMod : MelonMod
     private float contactHoldSeconds;
     private float ironBootsVerticalVelocityThreshold;
     private System.Numerics.Vector3 hudOffset;
+    private System.Numerics.Vector3 ironBootsHudOffset;
     private Scene? activeMap;
     private double? mapReadySince;
     private (int Controller, int Body, int Origin, int Headset) readyTarget;
@@ -42,9 +43,9 @@ public sealed class TrainerMod : MelonMod
         showStructureVelocity = preferences.CreateEntry("HudShowStructureVelocity", false,
             description: "Show relative velocity arrows for nearby structures.").Value;
         showNormalSpeed = preferences.CreateEntry("HudShowNormalSpeed", true,
-            description: "Draw live arrows toward the player, sized by normal speed. Before contact, estimate it from the gap.").Value;
+            description: "Draw live normal-speed arrows toward the player when closing and away when separating. Before contact, estimate speed from the gap.").Value;
         showNormalSpeedOnBreak = preferences.CreateEntry("HudShowNormalSpeedOnBreak", true,
-            description: "Draw an arrow sized by normal speed on retained breaks.").Value;
+            description: "Draw an arrow along the contact normal on retained breaks. The sign of normal speed sets its direction.").Value;
         showVelocityOnBreak = preferences.CreateEntry("HudShowVelocityOnBreak", false,
             description: "Show the frozen relative velocity arrow on retained breaks.").Value;
         contactHoldSeconds = preferences.CreateEntry("HudContactHoldSeconds", FlightHudState.DefaultContactHoldSeconds,
@@ -53,15 +54,35 @@ public sealed class TrainerMod : MelonMod
             IronBootsContactGate.DefaultVerticalVelocityThreshold,
             description: "Show Iron Boots feedback during foot contact while the VR body's vertical velocity in m/s is below this value. Negative means downward.").Value;
         ironBootsVerticalVelocityThreshold = float.IsFinite(threshold) ? threshold : IronBootsContactGate.DefaultVerticalVelocityThreshold;
-        hudOffset = new(
-            ReadOffset("HudOffsetX", "Move the HUD right by this many metres. Use a negative value to move left."),
-            ReadOffset("HudOffsetY", "Move the HUD up by this many metres. Use a negative value to move down."),
-            ReadOffset("HudOffsetZ", "Move the HUD farther away by this many metres. Use a negative value to move closer."));
+        hudOffset = ReadOffsets("HudOffset", "main HUD", System.Numerics.Vector3.Zero);
+        var ironBootsOrigin = preferences.CreateEntry("IronBootsHudOffsetsUseMainOrigin", false,
+            description: "Interpret Iron Boots offsets from the shared HUD origin.", is_hidden: true);
+        ironBootsHudOffset = ReadOffsets("IronBootsHudOffset", "Iron Boots HUD", new(0.31f, 0.035f, 0f),
+            migrateFromPanelOrigin: !ironBootsOrigin.Value);
+        ironBootsOrigin.Value = true;
+        ironBootsOrigin.EditedValue = true;
 
-        float ReadOffset(string key, string description)
+        System.Numerics.Vector3 ReadOffsets(string prefix, string panel, System.Numerics.Vector3 defaults,
+            bool migrateFromPanelOrigin = false) => new(
+            ReadOffset(prefix + "X", $"Move the {panel} right by this many metres. Use a negative value to move left.",
+                defaults.X, migrateFromPanelOrigin),
+            ReadOffset(prefix + "Y", $"Move the {panel} up by this many metres. Use a negative value to move down.",
+                defaults.Y, migrateFromPanelOrigin),
+            ReadOffset(prefix + "Z", $"Move the {panel} farther away by this many metres. Use a negative value to move closer.",
+                defaults.Z, migrateFromPanelOrigin));
+
+        float ReadOffset(string key, string description, float defaultValue, bool migrateFromPanelOrigin)
         {
-            float value = preferences.CreateEntry(key, 0f, description: description).Value;
-            return float.IsFinite(value) ? value : 0f;
+            var entry = preferences.CreateEntry(key, migrateFromPanelOrigin ? 0f : defaultValue, description: description);
+            float offset = entry.Value + (migrateFromPanelOrigin ? defaultValue : 0f);
+            offset = float.IsFinite(offset) ? offset : defaultValue;
+            if (migrateFromPanelOrigin)
+            {
+                entry.DefaultValue = defaultValue;
+                entry.Value = offset;
+                entry.EditedValue = offset;
+            }
+            return offset;
         }
     }
 
@@ -126,7 +147,7 @@ public sealed class TrainerMod : MelonMod
             var playerReference = frame.Structures.Length > 0 || frame.Breaks.Any(broken => broken.PlayerContact?.Placement is not null)
                 ? telemetry?.ReadHudPlayerReference() : null;
             var ironBoots = map.name == Gym ? telemetry?.ReadIronBoots(active.Origin) : null;
-            view.Draw(headset, frame, playerReference, hudOffset, ironBoots, nearby?.Velocities);
+            view.Draw(headset, frame, playerReference, hudOffset, ironBootsHudOffset, ironBoots, nearby?.Velocities);
         }
         catch (Exception error)
         {
@@ -153,7 +174,7 @@ public sealed class TrainerMod : MelonMod
         if (activeMap is null)
         {
             activeMap = scene;
-            LoggerInstance.Msg($"Flight trainer entered {scene.name}. F8 toggles the HUD and F7 resets contact history.");
+            LoggerInstance.Msg($"Flight trainer entered {scene.name}. F8 toggles the HUD.");
         }
         return scene;
     }

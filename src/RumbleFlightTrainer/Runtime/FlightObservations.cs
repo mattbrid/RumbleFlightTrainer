@@ -98,7 +98,7 @@ internal sealed record GameplayObservation(
     string? Detail = null, long? CombatTimestamp = null,
     CombatMeasurement? Combat = null, BreakAnalysis? Break = null, long? CollisionSequence = null,
     IronBootsBreakEvidence? IronBoots = null, IronBootsApproach? JumpDiagram = null,
-    HudPlayerBreakContact? PlayerContactEstimate = null) : TraceRecord(Stamp);
+    HudPlayerBreakContact? PlayerContactEstimate = null, string? PlayerCombatEvent = null) : TraceRecord(Stamp);
 
 internal sealed record CombatVelocity(Vec3 Positional, Vec3 Angular);
 internal sealed record CombatMeasurement(CombatVelocity FirstStructure, CombatVelocity? SecondStructure = null,
@@ -111,7 +111,8 @@ internal sealed record CombatHealthObservation(TraceStamp Stamp, long? Tick, Str
 
 internal sealed record BreakAnalysis(
     TraceStamp? KillRequest, BreakCandidate[] Candidates, bool TimelineComplete,
-    long? DirectCollisionSequence = null, HudPlayerBreakContact? ObservedPlayerContact = null)
+    long? DirectCollisionSequence = null, HudPlayerBreakContact? ObservedPlayerContact = null,
+    BreakCandidate? DirectPlayerCombat = null)
 {
     public BreakCandidate? Match
     {
@@ -119,6 +120,8 @@ internal sealed record BreakAnalysis(
         {
             if (DirectCollisionSequence is { } direct)
                 return Candidates.FirstOrDefault(candidate => candidate.Stamp.Sequence == direct);
+            if (DirectPlayerCombat is not null)
+                return DirectPlayerCombat;
             if (!TimelineComplete)
                 return null;
             if (Candidates.Length == 1)
@@ -152,7 +155,7 @@ internal sealed record BreakCandidate(TraceStamp Stamp, long? Tick, string Event
     BreakImpact? Impact, float? LinearImpactMetersPerSecond = null, string? Environment = null,
     IronBootsBreakEvidence? IronBoots = null, IronBootsApproach? JumpDiagram = null,
     HudPlayerBreakContact? PlayerContact = null, HudPlayerBreakContact? PlayerContactEstimate = null,
-    int? PlayerDamage = null);
+    int? PlayerDamage = null, bool DelayedPlayerHit = false);
 
 internal sealed record BreakImpact(TraceStamp Stamp, long Tick, string Phase, int BreakingBodyId, int? CounterpartBodyId,
     int ReportedPointCount, double? BreakingSampleAgeSeconds, double? CounterpartSampleAgeSeconds,

@@ -17,7 +17,7 @@ internal sealed partial class FlightHudView
         LineRenderer Feet, LineRenderer Contact, LineRenderer Arc, TextMeshPro Angle, TextMeshPro LastContact,
         Material Aligned, Material Unaligned);
 
-    private void DrawIronBoots(Transform headset, Vector3 hudPosition, IronBootsDisplay? frame)
+    private void DrawIronBoots(Transform headset, Vector3 defaultHudPosition, System.Numerics.Vector3 offset, IronBootsDisplay? frame)
     {
         if (frame is not { Sample: var approach, Retained: var retained })
         {
@@ -42,8 +42,8 @@ internal sealed partial class FlightHudView
         }
 
         var panel = ironBootsPanel ??= CreateIronBootsPanel();
-        panel.Root.transform.SetPositionAndRotation(
-            hudPosition + headset.right * 0.31f + headset.up * 0.035f, headset.rotation);
+        var position = defaultHudPosition + headset.right * offset.X + headset.up * offset.Y + headset.forward * offset.Z;
+        panel.Root.transform.SetPositionAndRotation(position, headset.rotation);
         if (updated)
         {
             SetDiagramPath(panel.Box, diagram.Section);

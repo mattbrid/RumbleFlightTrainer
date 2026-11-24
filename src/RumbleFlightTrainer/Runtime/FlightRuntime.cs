@@ -3,7 +3,6 @@ using Il2CppRUMBLE.Players;
 using Il2CppRUMBLE.Players.Subsystems;
 using MelonLoader;
 using UnityEngine;
-using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
 using PlayerManager = Il2CppRUMBLE.Managers.PlayerManager;
 
@@ -131,10 +130,11 @@ internal sealed class FlightRuntime
         var vr = Controller.PlayerVR;
         Origin = vr == null ? null : vr.Origin;
         int? nextOriginId = Origin == null ? null : Origin.GetInstanceID();
-        if (Keyboard.current?.f7Key.wasPressedThisFrame == true)
-            ResetSegment(frame, "desktop_f7", "operator_marked_discontinuity");
-        else if (originObserved && originId != nextOriginId)
-            ResetSegment(frame, "melon_late_update", "tracking_origin_instance_changed");
+        if (originObserved && originId != nextOriginId)
+        {
+            Telemetry?.ResetContacts();
+            Observations.StartSegment(frame, "melon_late_update", "tracking_origin_instance_changed");
+        }
         originId = nextOriginId;
         originObserved = true;
         Observations.FlushBreaks();
@@ -195,12 +195,6 @@ internal sealed class FlightRuntime
 
     private bool IsCurrent(Scene active) => active == scene && Controller != null && body != null && Movement != null &&
         FindLocalController() == Controller && Controller.PlayerPhysics?.PhysicsRigidbody == body;
-
-    private void ResetSegment(int frame, string source, string reason)
-    {
-        Telemetry?.ResetContacts();
-        Observations.StartSegment(frame, source, reason);
-    }
 
     private void Publish(TraceRecord observation)
     {

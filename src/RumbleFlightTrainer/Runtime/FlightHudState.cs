@@ -10,7 +10,7 @@ internal sealed record HudBreak(StructureKey Key, string? Name, BreakAnalysis? A
 }
 internal sealed record HudPlayerBreakContact(HudContactPlacement? Placement, HudContactPatch? Patch, Vector3 CenterWorld,
     Vector3? RelativeVelocityWorld, float? NormalMetersPerSecond, bool LinearEstimate, bool EstimatedContact = false,
-    int? PlayerColliderId = null);
+    int? PlayerColliderId = null, Vector3? NormalTowardPlayerWorld = null);
 
 internal sealed record HudPairGeometry(
     ContactKey Pair, long? Tick, HudContactPatch[] Patches, HudContactPlacement? Placement);
@@ -78,6 +78,7 @@ internal sealed record FlightHudFrame(
 
         string cause = match?.Event switch
         {
+            "player_hit" or "player_hit_from_beneath" when match.DelayedPlayerHit => "after hitting you",
             "player_hit" or "player_hit_from_beneath" => "hit you",
             "jump_on_structure" when match.PlayerDamage is > 0 => "hit you",
             "jump_on_structure" => "jump contact",

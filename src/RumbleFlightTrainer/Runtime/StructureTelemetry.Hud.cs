@@ -186,15 +186,32 @@ internal sealed partial class StructureTelemetry
         var playerVelocity = (mainBody ? combat.PlayerPhysicsBody?.Positional : null) ?? sampledVelocity ??
             ToVec3(receiver == null ? body.linearVelocity : receiver.linearVelocity);
         var relative = FlightContactPatches.Vector(combat.FirstStructure.Positional) - FlightContactPatches.Vector(playerVelocity);
-        var normal = gap.sqrMagnitude > 1e-8f ? gap : EstimateOverlapNormal(hitbox, structure);
+        var normal = EstimateBreakNormal(hitbox, structure, playerPoint, gap).normalized;
         var normalSpeed = ProjectHudSpeed(new Vector3(relative.X, relative.Y, relative.Z), normal);
         return new HudPlayerBreakContact(placement, new HudContactPatch(Array.Empty<ContactGeometry>(), null, null, point),
             center, FlightContactPatches.IsFinite(relative) ? relative : null, normalSpeed, LinearEstimate: true, EstimatedContact: true,
-            PlayerColliderId: hitbox.GetInstanceID());
+            PlayerColliderId: hitbox.GetInstanceID(),
+            NormalTowardPlayerWorld: normalSpeed.HasValue ? FlightContactPatches.Vector(ToVec3(normal)) : null);
     }
 
-    private Vector3 EstimateOverlapNormal(Collider hitbox, Collider structure)
+    private Vector3 EstimateBreakNormal(Collider hitbox, Collider structure, Vector3 playerPoint, Vector3 gap)
     {
+        float distance = gap.magnitude;
+        if (distance > 0.0001f)
+        {
+            try
+            {
+                if (structure.Raycast(new Ray(playerPoint, -gap / distance), out var hit, distance + 0.01f) &&
+                    Vector3.Dot(hit.normal, gap) > 0f)
+                    return hit.normal;
+            }
+            catch (Exception error)
+            {
+                ReportFailure("hud_break_surface_normal", error);
+            }
+            return gap;
+        }
+
         try
         {
             var playerPose = hitbox.transform;

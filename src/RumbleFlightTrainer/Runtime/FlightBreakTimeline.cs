@@ -6,6 +6,7 @@ internal sealed class FlightBreakTimeline
 {
     // Saved Gym delays run from the same tick through 13 ticks (about 0.27 seconds).
     internal const double MatchSeconds = 0.30;
+    private const double DelayedPlayerHitSeconds = 0.45;
     private const double MaxSampleAgeSeconds = 0.10;
     private const int MaxObservations = 4096;
     private readonly short localActor;
@@ -34,7 +35,7 @@ internal sealed class FlightBreakTimeline
         if (record is IronBootsContactStarted start)
             ironBootsContactSequence = start.Stamp.Sequence;
 
-        double oldest = record.Stamp.TimeSeconds - MatchSeconds;
+        double oldest = record.Stamp.TimeSeconds - DelayedPlayerHitSeconds;
         while (history.TryPeek(out var first) && first.Stamp.TimeSeconds < oldest)
             history.Dequeue();
 
@@ -53,28 +54,40 @@ internal sealed class FlightBreakTimeline
         return null;
     }
 
-    private BreakAnalysis Explain(GameplayObservation end, StructureKey key, double oldest)
+    private BreakAnalysis Explain(GameplayObservation end, StructureKey key, double delayedOldest)
     {
+        double oldest = end.Stamp.TimeSeconds - MatchSeconds;
         var relevant = history.OfType<GameplayObservation>().Where(row => row.Structure == key || row.OtherStructure == key);
-        var kill = relevant.LastOrDefault(row => row.Event == "structure_kill_requested");
+        var kill = relevant.LastOrDefault(row => row.Event == "structure_kill_requested" && row.Stamp.TimeSeconds >= oldest);
         long? impactTick = kill?.LastPhysicsTick ?? end.LastPhysicsTick;
-        var candidates = relevant.Where(row =>
-                row.Event == "structure_collision" ||
-                row.Actor == localActor && (row.Event is "player_hit" or "player_hit_from_beneath" or "jump_on_structure"))
-            .Select(row => Candidate(row, key, impactTick)).ToList();
+        var combat = relevant.Where(row => row.Event == "structure_collision" || row.Actor == localActor &&
+            row.Structure == key && (row.Event is "player_hit" or "player_hit_from_beneath" or "jump_on_structure"));
+        var candidates = combat.Where(row => row.Stamp.TimeSeconds >= oldest)
+            .Select(row => Candidate(row, key, impactTick, oldest)).ToList();
         long? directCollision = end.CollisionSequence ?? kill?.CollisionSequence;
         foreach (var hit in history.OfType<StructureImpactObservation>().Where(row => row.Environment is not null && row.First.Structure == key))
         {
             if (hit.Stamp.Sequence == directCollision ||
-                impactTick is not null && hit.PhysicsTick == impactTick &&
+                hit.Stamp.TimeSeconds >= oldest && impactTick is not null && hit.PhysicsTick == impactTick &&
                 (kill is null || hit.Stamp.Sequence < kill.Stamp.Sequence) && IsWall(hit))
                 candidates.Add(EnvironmentCandidate(hit));
         }
 
-        bool complete = probesAvailable && oldest > droppedThrough &&
-            !history.OfType<StructureImpactGap>().Any(gap => gap.Structure == key || gap.OtherStructure == key ||
-                (gap.Structure is null && gap.OtherStructure is null));
-        var analysis = new BreakAnalysis(kill?.Stamp, candidates.ToArray(), complete, directCollision);
+        BreakCandidate? directPlayerCombat = null;
+        if (directCollision is null && end.PlayerCombatEvent is { } kind && end.CombatTimestamp is { } timestamp)
+        {
+            var source = combat.LastOrDefault(row => row.Structure == key && row.Event == kind &&
+                row.CombatTimestamp == timestamp);
+            directPlayerCombat = Candidate(source ?? end with { Event = kind, Actor = localActor }, key, impactTick, delayedOldest);
+        }
+
+        bool complete = HasCompleteCollisionHistory(key, oldest);
+        if (directCollision is null && directPlayerCombat is null && candidates.Count == 0 &&
+            FindDelayedPlayerHit(end, key, combat) is { } delayedHit)
+            candidates.Add(Candidate(delayedHit, key, impactTick, delayedOldest) with { DelayedPlayerHit = true });
+
+        var analysis = new BreakAnalysis(kill?.Stamp, candidates.ToArray(), complete, directCollision,
+            DirectPlayerCombat: directPlayerCombat);
         var match = analysis.Match;
         if (directCollision is not null || match is { Event: "structure_collision" or "environment_collision" } ||
             match?.PlayerContact is { Placement: not null, NormalMetersPerSecond: not null })
@@ -82,11 +95,12 @@ internal sealed class FlightBreakTimeline
 
         // A physical touch can be retained even when processed events do not identify the break's cause.
         var observed = match?.PlayerContact;
-        var atDestruction = (impactTick ?? match?.Tick) is { } tick ? MatchPlayerContact(key, tick) : null;
+        var atDestruction = (impactTick ?? match?.Tick) is { } tick ? MatchPlayerContact(key, tick, oldest) : null;
         if (atDestruction is null && history.OfType<ContactObservation>().LastOrDefault(row =>
             row.Structure == key && row.Reason == "structure_destroyed") is { GeometryTick: { } lastTick } closed)
             atDestruction = history.OfType<ContactObservation>().LastOrDefault(row => row.Structure == key &&
-                row.Pair == closed.Pair && row.PhysicsTick == lastTick && row.Phase is "enter" or "stay" && row.Points.Length > 0);
+                row.Stamp.TimeSeconds >= oldest && row.Pair == closed.Pair && row.PhysicsTick == lastTick &&
+                row.Phase is "enter" or "stay" && row.Points.Length > 0);
         if (atDestruction is { PhysicsTick: { } contactTick } contact)
         {
             var step = history.OfType<PhysicsSample>().LastOrDefault(row => row.Tick == contactTick);
@@ -102,7 +116,31 @@ internal sealed class FlightBreakTimeline
         return analysis with { ObservedPlayerContact = observed?.Placement is not null ? observed : estimate ?? observed };
     }
 
-    private BreakCandidate Candidate(GameplayObservation combat, StructureKey key, long? impactTick)
+    private bool HasCompleteCollisionHistory(StructureKey key, double oldest) => probesAvailable && oldest > droppedThrough &&
+        !history.OfType<StructureImpactGap>().Any(gap => gap.Stamp.TimeSeconds >= oldest &&
+            (gap.Structure == key || gap.OtherStructure == key || (gap.Structure is null && gap.OtherStructure is null)));
+
+    private GameplayObservation? FindDelayedPlayerHit(GameplayObservation end, StructureKey key,
+        IEnumerable<GameplayObservation> combat)
+    {
+        var latest = combat.LastOrDefault(row => row.Stamp.Sequence < end.Stamp.Sequence);
+        if (latest is not { } hit || hit.Event is not ("player_hit" or "player_hit_from_beneath") ||
+            !HasCompleteCollisionHistory(key, hit.Stamp.TimeSeconds))
+            return null;
+
+        // The delayed hit remains a plausible explanation only if no other impact follows it before destruction.
+        bool laterImpact = history.OfType<StructureImpactObservation>().Any(row => AfterHit(row, row.PhysicsTick) &&
+            (row.First.Structure == key || row.Second.Structure == key)) ||
+            history.OfType<ContactObservation>().Any(row => AfterHit(row, row.PhysicsTick) && row.Structure == key && row.Phase == "enter" &&
+                row.PhysicsTick > hit.LastPhysicsTick);
+        return laterImpact ? null : hit;
+
+        // The stream publishes a break after the callbacks for its destruction step.
+        bool AfterHit(TraceRecord row, long? tick) => row.Stamp.Sequence > hit.Stamp.Sequence &&
+            (row.Stamp.Sequence < end.Stamp.Sequence || tick is not null && tick == end.LastPhysicsTick);
+    }
+
+    private BreakCandidate Candidate(GameplayObservation combat, StructureKey key, long? impactTick, double oldest)
     {
         bool structurePair = combat.Event == "structure_collision";
         bool breakingFirst = combat.Structure == key;
@@ -119,7 +157,7 @@ internal sealed class FlightBreakTimeline
         {
             if (structurePair)
             {
-                var registration = MatchRegistration(combat, key, counterpart, tick);
+                var registration = MatchRegistration(combat, key, counterpart, tick, oldest);
                 if (registration is not null)
                 {
                     impact = StructureImpact(combat, key, tick, registration);
@@ -136,8 +174,9 @@ internal sealed class FlightBreakTimeline
                     playerDamage = history.OfType<CombatHealthObservation>().Where(row =>
                             row.Structure == key && row.Event == combat.Event && row.Tick == tick && row.CombatTimestamp == timestamp)
                         .Select(row => row.Damage).Max();
-                var contact = MatchPlayerContact(key, tick) ?? history.OfType<ContactObservation>().LastOrDefault(row =>
-                    row.Structure == key && row.PhysicsTick < tick && row.Phase == "enter" && row.Points.Length > 0);
+                var contact = MatchPlayerContact(key, tick, oldest) ?? history.OfType<ContactObservation>().LastOrDefault(row =>
+                    row.Structure == key && row.Stamp.TimeSeconds >= oldest && row.PhysicsTick < tick &&
+                    row.Phase == "enter" && row.Points.Length > 0);
                 var fixedStep = history.OfType<PhysicsSample>().LastOrDefault(row => row.Tick == tick);
                 if (contact is { PhysicsTick: { } contactTick })
                 {
@@ -173,10 +212,10 @@ internal sealed class FlightBreakTimeline
             PlayerDamage: playerDamage);
     }
 
-    private ContactObservation? MatchPlayerContact(StructureKey key, long tick)
+    private ContactObservation? MatchPlayerContact(StructureKey key, long tick, double oldest)
     {
         // Hits can be processed on the step after the first physical contact.
-        return history.OfType<ContactObservation>().Where(row => row.Structure == key &&
+        return history.OfType<ContactObservation>().Where(row => row.Structure == key && row.Stamp.TimeSeconds >= oldest &&
                 row.PhysicsTick >= tick - 1 && row.PhysicsTick <= tick &&
                 row.Points.Length > 0 && row.Phase is "enter" or "stay")
             .GroupBy(row => (row.PhysicsTick, row.Pair))
@@ -200,12 +239,13 @@ internal sealed class FlightBreakTimeline
             return null;
 
         Vector3? relative = impactPoint?.RelativeVelocityWorld;
+        var contactNormal = impactPoint?.NormalTowardCounterpart ?? UnitContactNormal(FlightContactPatches.Vector(point.NormalTowardPlayer));
         float? normalSpeed = impactPoint?.ClosingMetersPerSecond;
         bool linearEstimate = impact?.LinearEstimate == true;
         if (relative is null && FlightContactPatches.StructureRelativeLinearVelocity(contact) is { } header)
         {
             relative = header;
-            normalSpeed = ProjectOnNormal(header, FlightContactPatches.Vector(point.NormalTowardPlayer));
+            normalSpeed = contactNormal is { } normal ? Vector3.Dot(header, normal) : null;
             linearEstimate = true;
         }
         if (relative is null && combat is not null && contact.OtherBodyId is { } structureBody &&
@@ -218,7 +258,7 @@ internal sealed class FlightBreakTimeline
             if (FiniteSpeed(estimate) is not null)
             {
                 relative = estimate;
-                normalSpeed = ProjectOnNormal(estimate, FlightContactPatches.Vector(point.NormalTowardPlayer));
+                normalSpeed = contactNormal is { } normal ? Vector3.Dot(estimate, normal) : null;
                 linearEstimate = true;
             }
         }
@@ -234,7 +274,7 @@ internal sealed class FlightBreakTimeline
                 contact.Frames, contact.Frames?.PlayerBody?.WorldPose);
             placement = collider?.Place(origin, player, tick) ?? new HudContactPlacement(origin, player, null);
             patch = FlightContactPatches.Build(new[] { point }, origin)[0];
-            if (impactPoint?.NormalTowardCounterpart is { } normal)
+            if (contactNormal is { } normal)
                 patch = patch with { BodyNormal = Vector3.Transform(normal, Quaternion.Conjugate(origin.Yaw)) };
         }
 
@@ -243,7 +283,7 @@ internal sealed class FlightBreakTimeline
         if (!FlightContactPatches.IsFinite(center))
             center = FlightContactPatches.Vector(point.PointWorld);
         return new HudPlayerBreakContact(placement, patch, center, relative, normalSpeed, linearEstimate,
-            PlayerColliderId: contact.Pair.PlayerColliderId);
+            PlayerColliderId: contact.Pair.PlayerColliderId, NormalTowardPlayerWorld: contactNormal);
     }
 
     private static BreakImpact? PlayerImpact(ContactObservation contact, long tick)
@@ -257,13 +297,14 @@ internal sealed class FlightBreakTimeline
             linearRelative: FlightContactPatches.StructureRelativeLinearVelocity(contact));
     }
 
-    private StructureImpactObservation? MatchRegistration(GameplayObservation combat, StructureKey key, StructureKey? counterpart, long tick)
+    private StructureImpactObservation? MatchRegistration(GameplayObservation combat, StructureKey key, StructureKey? counterpart,
+        long tick, double oldest)
     {
         if (counterpart is null || counterpart == key)
             return null;
 
         var registrations = history.OfType<StructureImpactObservation>().Where(row =>
-            row.Environment is null && row.Stamp.Sequence < combat.Stamp.Sequence && row.PhysicsTick == tick &&
+            row.Environment is null && row.Stamp.TimeSeconds >= oldest && row.Stamp.Sequence < combat.Stamp.Sequence && row.PhysicsTick == tick &&
             (row.First.Structure == key && row.Second.Structure == counterpart ||
              row.Second.Structure == key && row.First.Structure == counterpart)).Take(2).ToArray();
         return registrations.Length == 1 ? registrations[0] : null;
@@ -358,9 +399,6 @@ internal sealed class FlightBreakTimeline
             return new ImpactSpeed(worldPoint, magnitude, closing, relative, unit);
         }
     }
-
-    private static float? ProjectOnNormal(Vector3 relative, Vector3 normal) =>
-        UnitContactNormal(normal) is { } unit ? Vector3.Dot(relative, unit) : null;
 
     private static Vector3? UnitContactNormal(Vector3 normal)
     {
