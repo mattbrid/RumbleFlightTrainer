@@ -6,13 +6,6 @@ internal sealed partial class FlightHudView
 {
     private const int CapsuleCapSteps = 16;
 
-    private static readonly (int From, int To)[] BoxEdges =
-    {
-        (0, 1), (2, 3), (4, 5), (6, 7),
-        (0, 2), (1, 3), (4, 6), (5, 7),
-        (0, 4), (1, 5), (2, 6), (3, 7)
-    };
-
     private readonly List<BoxWidget> boxes = new();
     private readonly List<MeshWidget> meshes = new();
     private readonly List<PlayerWidget> playerColliders = new();
@@ -167,7 +160,7 @@ internal sealed partial class FlightHudView
         if (index == boxes.Count)
         {
             var root = Child(anchor, "Structure box").transform;
-            var lines = new LineRenderer[BoxEdges.Length];
+            var lines = new LineRenderer[FlightBoxPreview.Edges.Length];
             for (int i = 0; i < lines.Length; i++)
             {
                 var line = Line(root, "Box edge", color, 0.0016f, DrawOrder.Wireframe);
@@ -185,9 +178,9 @@ internal sealed partial class FlightHudView
         {
             widget.Shape = box;
             widget.Color = color;
-            for (int i = 0; i < BoxEdges.Length; i++)
+            for (int i = 0; i < FlightBoxPreview.Edges.Length; i++)
             {
-                var (from, to) = BoxEdges[i];
+                var (from, to) = FlightBoxPreview.Edges[i];
                 var line = widget.Edges[i];
                 line.sharedMaterial = color;
                 line.SetPosition(0, ToUnity(box.Corners[from] - box.Center) * HudContactPlacement.Scale);

@@ -14,6 +14,15 @@ internal static class FlightContactPatches
 
     private readonly record struct Point(ContactGeometry Geometry, Vector3 Position, Vector3 Normal);
 
+    public static Vector3? PlayerImpulse(ContactObservation contact)
+    {
+        if (contact.PairImpulseRaw is not { } raw || contact.PlayerIsSecondInNativePair is not { } second)
+            return null;
+        var impulse = Vector(raw);
+        // The v0.2.0 Gym drill verified this sign on upward-facing cube contacts.
+        return IsFinite(impulse) ? (second ? -impulse : impulse) : null;
+    }
+
     public static HudContactPatch[] Build(ContactGeometry[] geometry, HudBodyFrame? body)
     {
         if (geometry.Length == 0)

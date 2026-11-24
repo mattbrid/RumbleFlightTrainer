@@ -23,6 +23,7 @@ internal sealed partial class StructureTelemetry : IDisposable
     private readonly short actor;
     private readonly int footId;
     private readonly int capsuleId;
+    private readonly bool ironBootsEnabled;
     private readonly List<FlightContactObserver> observers = new();
     private readonly Dictionary<int, StructureKey> keys = new();
     private readonly HashSet<int> returned = new();
@@ -66,12 +67,14 @@ internal sealed partial class StructureTelemetry : IDisposable
     private sealed record ActiveContact(Collider? PlayerCollider, Collider OtherCollider, ContactObservation Last);
 
 
-    public StructureTelemetry(FlightObservationStream session, PlayerController controller, Rigidbody body, MelonLogger.Instance logger)
+    public StructureTelemetry(FlightObservationStream session, PlayerController controller, Rigidbody body,
+        MelonLogger.Instance logger, bool ironBootsEnabled)
     {
         this.session = session;
         this.controller = controller;
         this.body = body;
         this.logger = logger;
+        this.ironBootsEnabled = ironBootsEnabled;
         actor = controller.ActorNo;
         var physics = controller.PlayerPhysics;
         var foot = physics.FootCollider;
@@ -229,6 +232,8 @@ internal sealed partial class StructureTelemetry : IDisposable
             observation = CaptureContactDetails(observation with { RelativeLinearVelocity = TryCollisionLinearVelocity(collision) },
                 entry, own, other, otherBody, observedAt);
         contacts[key] = new ActiveContact(own, other, observation);
+        if (ironBootsEnabled && tick is { } contactTick)
+            SampleIronBoots(contactTick, observedAt, observation, entry, own, other);
         session.CaptureContact(Time.frameCount, observation);
     }
 
@@ -359,6 +364,7 @@ internal sealed partial class StructureTelemetry : IDisposable
 
     public void ResetContacts()
     {
+        ironBootsTarget = null;
         CloseContacts(null, "coordinate_segment_changed");
         nearby.Clear();
         sampledKeys.Clear();

@@ -68,14 +68,21 @@ internal sealed partial class StructureTelemetry
     public HudNearbyCollider? ReadHudPlayerReference()
     {
         var collider = controller.PlayerPhysics.pillBodyCollider;
-        if (!ColliderActive(collider))
+        if (collider == null || ReadHudPlayerCollider(collider) is not { } player)
+            return null;
+
+        var origin = new HudBodyFrame(FlightContactPatches.Vector(ToVec3(body.worldCenterOfMass)),
+            System.Numerics.Quaternion.Identity);
+        return new HudNearbyCollider(collider.GetInstanceID(), new HudContactPlacement(origin, player, null));
+    }
+
+    private HudPlayerCollider? ReadHudPlayerCollider(Collider? collider)
+    {
+        if (collider == null || !ColliderActive(collider))
             return null;
 
         var frame = HudColliderFrame.From(Frame(ColliderPhysicsFrame(collider, collider.attachedRigidbody)));
-        var player = HudPlayerCollider.Build(ReadShape(collider), frame);
-        var origin = new HudBodyFrame(FlightContactPatches.Vector(ToVec3(body.worldCenterOfMass)),
-            System.Numerics.Quaternion.Identity);
-        return player is null ? null : new HudNearbyCollider(collider.GetInstanceID(), new HudContactPlacement(origin, player, null));
+        return HudPlayerCollider.Build(ReadShape(collider), frame);
     }
 
     private int QueryHudColliders(Vector3 center)

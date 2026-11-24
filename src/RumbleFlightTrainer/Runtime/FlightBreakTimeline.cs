@@ -53,12 +53,12 @@ internal sealed class FlightBreakTimeline
     {
         var relevant = history.OfType<GameplayObservation>().Where(row => row.Structure == key || row.OtherStructure == key);
         var kill = relevant.LastOrDefault(row => row.Event == "structure_kill_requested");
+        long? impactTick = kill?.LastPhysicsTick ?? end.LastPhysicsTick;
         var candidates = relevant.Where(row =>
                 row.Event == "structure_collision" ||
                 row.Actor == localActor && (row.Event is "player_hit" or "player_hit_from_beneath" or "jump_on_structure"))
-            .Select(row => Candidate(row, key)).ToList();
+            .Select(row => Candidate(row, key, impactTick)).ToList();
         long? directCollision = end.CollisionSequence ?? kill?.CollisionSequence;
-        long? impactTick = kill?.LastPhysicsTick ?? end.LastPhysicsTick;
         foreach (var hit in history.OfType<StructureImpactObservation>().Where(row => row.Environment is not null && row.First.Structure == key))
         {
             if (hit.Stamp.Sequence == directCollision ||
@@ -73,7 +73,7 @@ internal sealed class FlightBreakTimeline
         return new BreakAnalysis(kill?.Stamp, candidates.ToArray(), complete, directCollision);
     }
 
-    private BreakCandidate Candidate(GameplayObservation combat, StructureKey key)
+    private BreakCandidate Candidate(GameplayObservation combat, StructureKey key, long? impactTick)
     {
         bool structurePair = combat.Event == "structure_collision";
         bool breakingFirst = combat.Structure == key;
@@ -82,7 +82,7 @@ internal sealed class FlightBreakTimeline
             counterpart = null;
         BreakImpact? impact = null;
         float? linearSpeed = null;
-        bool possibleIronBoots = false;
+        IronBootsBreakEvidence? ironBoots = null;
         if (combat.LastPhysicsTick is { } tick)
         {
             if (structurePair)
@@ -111,16 +111,15 @@ internal sealed class FlightBreakTimeline
                     if ((gamePlayer ?? fixedPlayer) is { } player)
                         linearSpeed ??= FiniteSpeed(FlightContactPatches.Vector(snapshots.FirstStructure.Positional) -
                             FlightContactPatches.Vector(player));
-                    if (combat.Event == "jump_on_structure" && contact is { PlayerHitbox: "foot" } &&
-                        gamePlayer is { Y: < -0.25f } descent)
-                        possibleIronBoots = contact.Points.Any(point => Vector3.Dot(FlightContactPatches.Vector(descent),
-                            FlightContactPatches.Vector(point.NormalTowardPlayer)) < 0);
                 }
+                if (combat.Event == "jump_on_structure" && combat.Structure == key && tick == impactTick &&
+                    combat.IronBoots is { MatchesDirection: true } evidence)
+                    ironBoots = evidence;
             }
         }
         return new BreakCandidate(combat.Stamp, combat.LastPhysicsTick, combat.Event, combat.Actor,
             structurePair ? counterpart : null, structurePair ? (breakingFirst ? combat.Detail : combat.StructureName) : null,
-            combat.CombatTimestamp, combat.Combat, impact, linearSpeed, PossibleIronBoots: possibleIronBoots);
+            combat.CombatTimestamp, combat.Combat, impact, linearSpeed, IronBoots: ironBoots);
     }
 
     private ContactObservation? MatchPlayerContact(StructureKey key, long tick)

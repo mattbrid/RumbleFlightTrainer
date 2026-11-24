@@ -96,11 +96,12 @@ internal sealed record GameplayObservation(
     TraceStamp Stamp, long? LastPhysicsTick, string Event, string Source, short? Actor,
     StructureKey? Structure = null, string? StructureName = null, StructureKey? OtherStructure = null,
     string? Detail = null, long? CombatTimestamp = null,
-    CombatMeasurement? Combat = null, BreakAnalysis? Break = null, long? CollisionSequence = null) : TraceRecord(Stamp);
+    CombatMeasurement? Combat = null, BreakAnalysis? Break = null, long? CollisionSequence = null,
+    IronBootsBreakEvidence? IronBoots = null) : TraceRecord(Stamp);
 
 internal sealed record CombatVelocity(Vec3 Positional, Vec3 Angular);
 internal sealed record CombatMeasurement(CombatVelocity FirstStructure, CombatVelocity? SecondStructure = null,
-    Vec3? CollisionPoint = null, CombatVelocity? PlayerPhysicsBody = null);
+    Vec3? CollisionPoint = null, CombatVelocity? PlayerPhysicsBody = null, CombatVelocity? PlayerVrBody = null);
 
 internal sealed record BreakAnalysis(
     TraceStamp? KillRequest, BreakCandidate[] Candidates, bool TimelineComplete,
@@ -116,7 +117,7 @@ internal sealed record BreakAnalysis(
 internal sealed record BreakCandidate(TraceStamp Stamp, long? Tick, string Event, short? Actor,
     StructureKey? Counterpart, string? CounterpartName, long? CombatTimestamp, CombatMeasurement? Combat,
     BreakImpact? Impact, float? LinearImpactMetersPerSecond = null, string? Environment = null,
-    bool PossibleIronBoots = false);
+    IronBootsBreakEvidence? IronBoots = null);
 
 internal sealed record BreakImpact(TraceStamp Stamp, long Tick, string Phase, int BreakingBodyId, int? CounterpartBodyId,
     int ReportedPointCount, double? BreakingSampleAgeSeconds, double? CounterpartSampleAgeSeconds,

@@ -48,10 +48,14 @@ internal sealed record FlightHudFrame(
     private static string FormatBreak(HudBreak item)
     {
         var match = item.Analysis?.Match;
+        if (match?.IronBoots is { } boots)
+            return boots.IsLowRelativeSpeed
+                ? FormattableString.Invariant($"Structure Broke · Iron Boots ({boots.Alignment.AngleDegrees:F0}°)")
+                : FormattableString.Invariant($"Structure Broke · Iron Boots? ({boots.Alignment.AngleDegrees:F0}°|{boots.RelativeLinearSpeed:F1}m/s)");
+
         string cause = match?.Event switch
         {
             "player_hit" or "player_hit_from_beneath" => "hit you",
-            "jump_on_structure" when match.PossibleIronBoots => "possible Iron Boots",
             "jump_on_structure" => "jump contact",
             "structure_collision" => $"hit {match.CounterpartName ?? "another structure"}",
             "environment_collision" => $"hit {match.Environment}",
@@ -253,16 +257,11 @@ internal sealed class FlightHudState
             pair.Geometry = BuildGeometry(key, contact.Pair, contact.Stamp.Segment, contact.GeometryTick, contact.PlayerBodyId,
                 contact.Points, contact.Frames, SameStep(contact.Impact?.First), SameStep(contact.Impact?.Second), step);
 
-        if (contact.PhysicsTick is { } impulseTick && contact.PairImpulseRaw is { } raw &&
-            contact.PlayerIsSecondInNativePair is { } second)
+        if (contact.PhysicsTick is { } impulseTick && FlightContactPatches.PlayerImpulse(contact) is { } world &&
+            measuredTicks.Add((contact.Pair, key, impulseTick)))
         {
-            var world = FlightContactPatches.Vector(raw);
-            if (FlightContactPatches.IsFinite(world) && measuredTicks.Add((contact.Pair, key, impulseTick)))
-            {
-                ExpireImpulses(pair, impulseTick);
-                // The v0.2.0 Gym drill verified this sign on upward-facing cube contacts.
-                pair.Impulses.Enqueue((impulseTick, second ? -world : world));
-            }
+            ExpireImpulses(pair, impulseTick);
+            pair.Impulses.Enqueue((impulseTick, world));
         }
     }
 

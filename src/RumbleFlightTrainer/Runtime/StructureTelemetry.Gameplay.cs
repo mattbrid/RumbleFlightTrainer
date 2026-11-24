@@ -146,13 +146,14 @@ internal sealed partial class StructureTelemetry
         else if (combat.TryCast<JumpOnStructureEvent>() is { } jump)
             RecordLocalCombat("jump_on_structure", jump.Player, jump.StructureSnapshot, combat.Timestamp,
                 new CombatMeasurement(ReadCombatVelocity(jump.StructureSnapshot.Velocity),
-                    PlayerPhysicsBody: ReadCombatVelocity(jump.PlayerPhysicsBodyVelocitySnapshot)));
+                    PlayerPhysicsBody: ReadCombatVelocity(jump.PlayerPhysicsBodyVelocitySnapshot)),
+                jump: jump);
         else if (combat.TryCast<StructureCollisionEvent>() is { } collision)
             RecordStructureCollision(collision, combat.Timestamp);
     }
 
     private void RecordLocalCombat(string kind, Player? player, StructureSnapshot snapshot, int timestamp,
-        CombatMeasurement? measurement = null)
+        CombatMeasurement? measurement = null, JumpOnStructureEvent? jump = null)
     {
         if (player?.Controller != controller)
             return;
@@ -162,10 +163,24 @@ internal sealed partial class StructureTelemetry
         if (knownKey is null && structure != null && keys.TryGetValue(structure.GetInstanceID(), out var key))
             knownKey = key;
 
+        IronBootsBreakEvidence? ironBoots = null;
+        if (jump is not null && measurement is not null && entry is not null && IsActive(entry))
+        {
+            try
+            {
+                measurement = measurement with { PlayerVrBody = ReadCombatVelocity(jump.PlayerVRBodyVelocitySnapshot) };
+                ironBoots = MeasureIronBootsBreak(entry.Structure, measurement);
+            }
+            catch (Exception error)
+            {
+                ReportFailure("iron_boots_jump_event", error);
+            }
+        }
+
         session.CaptureGameplay(Time.frameCount, new GameplayObservation(default, null, kind,
             "CombatManager.OnProcessCombatEvent", actor, knownKey,
             entry?.Name ?? snapshot.StructureName, CombatTimestamp: timestamp,
-            Combat: measurement ?? new CombatMeasurement(ReadCombatVelocity(snapshot.Velocity))));
+            Combat: measurement ?? new CombatMeasurement(ReadCombatVelocity(snapshot.Velocity)), IronBoots: ironBoots));
     }
 
     private void RecordStructureCollision(StructureCollisionEvent collision, int timestamp)

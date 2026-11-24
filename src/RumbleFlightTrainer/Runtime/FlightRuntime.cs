@@ -47,7 +47,7 @@ internal sealed class FlightRuntime
                 hooks.StructureCollisionProbeInstalled, hooks.EnvironmentCollisionProbeInstalled);
             Observations = new FlightObservationStream(capture);
             Observations.ObservationCaptured += Publish;
-            Telemetry = new StructureTelemetry(Observations, controller, body, logger);
+            Telemetry = new StructureTelemetry(Observations, controller, body, logger, scene.name == Gym);
         }
         catch
         {

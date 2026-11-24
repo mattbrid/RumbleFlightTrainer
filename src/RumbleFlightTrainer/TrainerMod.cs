@@ -99,7 +99,8 @@ public sealed class TrainerMod : MelonMod
 
             view ??= new FlightHudView();
             var playerReference = nearby is { Count: > 0 } ? active.Telemetry?.ReadHudPlayerReference() : null;
-            view.Draw(headset, frame, playerReference, hudOffset);
+            var ironBoots = map.name == Gym ? active.Telemetry?.ReadIronBoots(active.Origin) : null;
+            view.Draw(headset, frame, playerReference, hudOffset, ironBoots);
         }
         catch (Exception error)
         {

@@ -93,10 +93,7 @@ internal sealed partial class FlightHudView : IDisposable
                 textMaterial.SetInt("unity_GUIZTestMode", (int)CompareFunction.Always);
             textMaterial.renderQueue = (int)RenderQueue.Overlay;
             status.fontSharedMaterial = textMaterial;
-            var textRenderer = statusObject.GetComponent<MeshRenderer>();
-            textRenderer.sortingOrder = (int)DrawOrder.Text;
-            textRenderer.shadowCastingMode = ShadowCastingMode.Off;
-            textRenderer.receiveShadows = false;
+            SetTextDrawOrder(status);
             root.SetActive(false);
         }
         catch
@@ -109,7 +106,7 @@ internal sealed partial class FlightHudView : IDisposable
     public void Hide() => root.SetActive(false);
 
     public void Draw(Transform headset, FlightHudFrame frame, HudNearbyCollider? playerReference,
-        System.Numerics.Vector3 offset)
+        System.Numerics.Vector3 offset, IronBootsDisplay? ironBoots)
     {
         Vector3 forward = headset.forward;
         var horizontal = new Vector3(forward.x, 0, forward.z);
@@ -160,6 +157,15 @@ internal sealed partial class FlightHudView : IDisposable
             ? new Color(1f, 0.82f, 0.57f) : new Color(0.90f, 0.97f, 0.96f);
         if (!root.activeSelf)
             root.SetActive(true);
+        DrawIronBoots(headset, position, ironBoots);
+    }
+
+    private static void SetTextDrawOrder(TextMeshPro text)
+    {
+        var renderer = text.GetComponent<MeshRenderer>();
+        renderer.sortingOrder = (int)DrawOrder.Text;
+        renderer.shadowCastingMode = ShadowCastingMode.Off;
+        renderer.receiveShadows = false;
     }
 
     private void AssignStructureColors(HudStructureFrame[] structures)
