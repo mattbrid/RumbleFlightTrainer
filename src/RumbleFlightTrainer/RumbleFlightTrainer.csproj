@@ -2,10 +2,10 @@
   <Import Project="../FlightBuild.props" />
 
   <PropertyGroup>
-    <Version>1.0.4</Version>
+    <Version>1.0.5</Version>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../RumbleFlightRuntime/RumbleFlightRuntime.csproj" />
+    <EmbeddedResource Include="Runtime/Assets/Wireframes/*.json" LogicalName="RumbleFlightTrainer.Wireframes.%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

@@ -13,7 +13,7 @@ namespace RumbleFlightTrainer;
 
 public sealed class TrainerMod : MelonMod
 {
-    internal const string Version = "1.0.4";
+    internal const string Version = "1.0.5";
     private const double StartupDelaySeconds = 3;
 
     private bool hudRequested;
