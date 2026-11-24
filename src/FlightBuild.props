@@ -1,0 +1,44 @@
+<Project>
+  <Import Project="$(MSBuildThisFileDirectory)../Directory.Build.local.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)../Directory.Build.local.props')" />
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PathMap>$(MSBuildThisFileDirectory)=/_/src/</PathMap>
+    <PathMap Condition="'$(ArtifactsPath)' != ''">$(PathMap),$(ArtifactsPath)=/_/artifacts</PathMap>
+    <LoaderDir>$(RumbleGameDir)/MelonLoader/net6</LoaderDir>
+    <InteropDir>$(RumbleGameDir)/MelonLoader/Il2CppAssemblies</InteropDir>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <Reference>
+      <Private>false</Private>
+    </Reference>
+  </ItemDefinitionGroup>
+
+  <ItemGroup Condition="'$(RumbleGameDir)' != ''">
+    <Reference Include="MelonLoader" HintPath="$(LoaderDir)/MelonLoader.dll" />
+    <Reference Include="0Harmony" HintPath="$(LoaderDir)/0Harmony.dll" />
+    <Reference Include="Il2CppInterop.Runtime" HintPath="$(LoaderDir)/Il2CppInterop.Runtime.dll" />
+    <Reference Include="Il2Cppmscorlib" HintPath="$(InteropDir)/Il2Cppmscorlib.dll" />
+    <Reference Include="Il2CppBucketheadEntertainment.Plugins" HintPath="$(InteropDir)/Il2CppBucketheadEntertainment.Plugins.dll" />
+    <Reference Include="Il2CppPhotonUnityNetworking" HintPath="$(InteropDir)/Il2CppPhotonUnityNetworking.dll" />
+    <Reference Include="Il2CppRUMBLE.Runtime" HintPath="$(InteropDir)/Il2CppRUMBLE.Runtime.dll" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(InteropDir)/UnityEngine.CoreModule.dll" />
+    <Reference Include="UnityEngine.PhysicsModule" HintPath="$(InteropDir)/UnityEngine.PhysicsModule.dll" />
+    <Reference Include="Unity.InputSystem" HintPath="$(InteropDir)/Unity.InputSystem.dll" />
+    <Reference Include="Unity.TextMeshPro" HintPath="$(InteropDir)/Unity.TextMeshPro.dll" />
+    <Reference Include="UnityEngine.UI" HintPath="$(InteropDir)/UnityEngine.UI.dll" />
+  </ItemGroup>
+
+  <Target Name="CheckGameReferences" BeforeTargets="ResolveAssemblyReferences" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="'$(RumbleGameDir)' == ''"
+           Text="Set RumbleGameDir to the directory containing RUMBLE.exe with -p:RumbleGameDir=&quot;path to RUMBLE&quot;." />
+    <Error Condition="!Exists('$(RumbleGameDir)/RUMBLE.exe')"
+           Text="RUMBLE.exe was not found under '$(RumbleGameDir)'." />
+    <Error Condition="'%(Reference.HintPath)' != '' And !Exists('%(Reference.HintPath)')"
+           Text="Missing game reference '%(Reference.HintPath)'. Launch the game with MelonLoader to generate interop assemblies." />
+  </Target>
+</Project>

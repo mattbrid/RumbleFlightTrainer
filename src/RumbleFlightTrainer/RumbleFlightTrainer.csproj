@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../FlightBuild.props" />
+
+  <PropertyGroup>
+    <Version>1.0.4</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../RumbleFlightRuntime/RumbleFlightRuntime.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,8 @@
+bin/
+obj/
+.vs/
+*.user
+Directory.Build.local.props
+*.zip
+*.jsonl
+*.jsonl.partial
