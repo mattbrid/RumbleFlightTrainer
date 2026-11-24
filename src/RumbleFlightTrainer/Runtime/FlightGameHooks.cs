@@ -131,6 +131,7 @@ internal sealed class FlightGameHooks : IDisposable
         state = new EnvironmentFrame(capture, capture.ActiveEnvironmentCollision);
         capture.ActiveEnvironmentCollision = null;
         capture.Guard("structure_environment_collision", () => capture.BeginEnvironmentCollision(structure, collision, phase));
+        capture.Guard("structure_side_player_contact", () => capture.CaptureStructureSidePlayerContact(structure, collision, phase));
     }
 
     private static Exception? EnvironmentCollisionFinalizer(Exception? __exception, EnvironmentFrame? __state)

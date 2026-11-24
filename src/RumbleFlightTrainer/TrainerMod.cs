@@ -17,6 +17,12 @@ public sealed class TrainerMod : MelonMod
     private const double StartupDelaySeconds = 3;
 
     private bool hudRequested;
+    private bool showPerStructureImpulse;
+    private bool showStructureVelocity;
+    private bool showNormalSpeed;
+    private bool showNormalSpeedOnBreak;
+    private bool showVelocityOnBreak;
+    private float contactHoldSeconds;
     private float ironBootsVerticalVelocityThreshold;
     private System.Numerics.Vector3 hudOffset;
     private Scene? activeMap;
@@ -31,6 +37,18 @@ public sealed class TrainerMod : MelonMod
         var preferences = MelonPreferences.CreateCategory("RumbleFlightTrainer");
         hudRequested = preferences.CreateEntry("HudEnabledOnStartup", true,
             description: "Enable the flight HUD in Gym and Park on startup. F8 toggles it for the current session.").Value;
+        showPerStructureImpulse = preferences.CreateEntry("HudShowPerStructureImpulse", false,
+            description: "Also show the strongest individual contact impulse arrows.", oldIdentifier: "HudShowImpulse").Value;
+        showStructureVelocity = preferences.CreateEntry("HudShowStructureVelocity", false,
+            description: "Show relative velocity arrows for nearby structures.").Value;
+        showNormalSpeed = preferences.CreateEntry("HudShowNormalSpeed", true,
+            description: "Draw live arrows toward the player, sized by normal speed. Before contact, estimate it from the gap.").Value;
+        showNormalSpeedOnBreak = preferences.CreateEntry("HudShowNormalSpeedOnBreak", true,
+            description: "Draw an arrow sized by normal speed on retained breaks.").Value;
+        showVelocityOnBreak = preferences.CreateEntry("HudShowVelocityOnBreak", false,
+            description: "Show the frozen relative velocity arrow on retained breaks.").Value;
+        contactHoldSeconds = preferences.CreateEntry("HudContactHoldSeconds", FlightHudState.DefaultContactHoldSeconds,
+            description: "Seconds to hold lost contacts and break reports. Zero hides retained contacts.").Value;
         float threshold = preferences.CreateEntry("IronBootsVerticalVelocityThreshold",
             IronBootsContactGate.DefaultVerticalVelocityThreshold,
             description: "Show Iron Boots feedback during foot contact while the VR body's vertical velocity in m/s is below this value. Negative means downward.").Value;
@@ -92,8 +110,9 @@ public sealed class TrainerMod : MelonMod
             if (runtime is not { } active || !active.BeginFrame() || state is not { } hud)
                 return;
 
-            var nearby = active.Telemetry?.ReadNearbyHudGeometry();
-            var frame = hud.Read(active.Observations.ElapsedSeconds, nearby);
+            var telemetry = active.Telemetry;
+            var nearby = telemetry?.ReadNearbyHudStructures(showStructureVelocity, showNormalSpeed);
+            var frame = hud.Read(active.Observations.ElapsedSeconds, nearby?.Geometry);
             var vr = active.Controller.PlayerVR;
             Transform? headset = active.Origin == null || vr == null ? null : vr.Headset?.Transform;
             if (headset == null)
@@ -102,10 +121,12 @@ public sealed class TrainerMod : MelonMod
                 return;
             }
 
-            view ??= new FlightHudView();
-            var playerReference = nearby is { Count: > 0 } ? active.Telemetry?.ReadHudPlayerReference() : null;
-            var ironBoots = map.name == Gym ? active.Telemetry?.ReadIronBoots(active.Origin) : null;
-            view.Draw(headset, frame, playerReference, hudOffset, ironBoots);
+            view ??= new FlightHudView(showPerStructureImpulse, showStructureVelocity, showNormalSpeed,
+                showVelocityOnBreak, showNormalSpeedOnBreak);
+            var playerReference = frame.Structures.Length > 0 || frame.Breaks.Any(broken => broken.PlayerContact?.Placement is not null)
+                ? telemetry?.ReadHudPlayerReference() : null;
+            var ironBoots = map.name == Gym ? telemetry?.ReadIronBoots(active.Origin) : null;
+            view.Draw(headset, frame, playerReference, hudOffset, ironBoots, nearby?.Velocities);
         }
         catch (Exception error)
         {
@@ -176,7 +197,7 @@ public sealed class TrainerMod : MelonMod
             return;
 
         runtime = active;
-        var hud = new FlightHudState(active.PhysicsBodyInstanceId);
+        var hud = new FlightHudState(active.PhysicsBodyInstanceId, contactHoldSeconds);
         state = hud;
         active.AttachTrainer(hud.Observe, HandleRuntimeStop);
         LoggerInstance.Msg($"Flight HUD enabled in {map.name}.");

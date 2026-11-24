@@ -2,7 +2,15 @@ using System.Numerics;
 
 namespace RumbleFlightTrainer;
 
-internal readonly record struct HudBodyFrame(Vector3 Center, Quaternion Yaw);
+internal readonly record struct HudBodyFrame(Vector3 Center, Quaternion Yaw)
+{
+    public static HudBodyFrame? From(PhysicsState physics)
+    {
+        var center = FlightContactPatches.Vector(physics.WorldCenterOfMass);
+        var yaw = FlightContactPatches.Yaw(physics.BodyWorldPose.Rotation);
+        return FlightContactPatches.IsFinite(center) && yaw is { } rotation ? new HudBodyFrame(center, rotation) : null;
+    }
+}
 internal sealed record HudContactPatch(ContactGeometry[] Points, Vector3? BodyDirection, Vector3? BodyNormal,
     Vector3? WorldPoint);
 
@@ -21,6 +29,15 @@ internal static class FlightContactPatches
         var impulse = Vector(raw);
         // The v0.2.0 Gym drill verified this sign on upward-facing cube contacts.
         return IsFinite(impulse) ? (second ? -impulse : impulse) : null;
+    }
+
+    public static Vector3? StructureRelativeLinearVelocity(ContactObservation contact)
+    {
+        if (contact.RelativeLinearVelocity is not { } raw || contact.PlayerIsSecondInNativePair is not { } second)
+            return null;
+        // The recorded header vector is native first minus second. Point normals already face the player.
+        var relative = Vector(raw);
+        return IsFinite(relative) ? (second ? relative : -relative) : null;
     }
 
     public static HudContactPatch[] Build(ContactGeometry[] geometry, HudBodyFrame? body)

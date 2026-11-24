@@ -14,6 +14,7 @@ internal sealed partial class StructureTelemetry
     private UnityAction<ICombatEvent>? combatListener;
     private bool combatManagerFailed;
     private bool combatListenerFailed;
+    private CombatHealthSample? activeCombatHealth;
 
     public void OnFetch(Structure structure)
     {
@@ -42,8 +43,11 @@ internal sealed partial class StructureTelemetry
         if (tracked.TryGetValue(key, out var entry))
             Record("structure_pool_return", "Structure.OnReturnToPool", entry);
         CloseContacts(key, "structure_returned");
-        Forget(key);
-        InvalidateImpactCapture(key);
+        if (entry?.Destroyed != true)
+        {
+            Forget(key);
+            InvalidateImpactCapture(key);
+        }
         nearby.Remove(key);
         sampledKeys.Remove(key);
     }
@@ -60,12 +64,18 @@ internal sealed partial class StructureTelemetry
         if (entry.Destroyed || disposed)
             return;
         entry.Destroyed = true;
+        entry.DestructionTick = session.LastPhysicsTick;
         destroyedHudKeys.Add(entry.Key);
-        session.CaptureGameplay(Time.frameCount, new GameplayObservation(default, null, "structure_destroyed",
+        if (terrainLayer is null)
+            session.DropStructureImpact(Time.frameCount, "environment_layer_unavailable", entry.Key);
+        var health = activeCombatHealth;
+        while (health is not null && health.Structure != entry.Key)
+            health = health.Outer;
+        var destruction = new GameplayObservation(default, null, "structure_destroyed",
             "Structure.onStructureDestroyed", null, entry.Key, entry.Name,
-            CollisionSequence: DirectEnvironmentImpact(entry.Key)));
+            CollisionSequence: DirectEnvironmentImpact(entry.Key), PlayerContactEstimate: health?.ContactEstimate);
+        session.CaptureGameplay(Time.frameCount, destruction);
         CloseContacts(entry.Key, "structure_destroyed");
-        InvalidateImpactCapture(entry.Key);
     }
 
     public void OnModifier(IProcessor processor, StackConfiguration? configuration)
@@ -153,7 +163,10 @@ internal sealed partial class StructureTelemetry
     }
 
     internal sealed record CombatHealthSample(Player Player, StructureKey Structure, string Event,
-        int CombatTimestamp, short HealthBefore, int Segment);
+        int CombatTimestamp, short HealthBefore, int Segment, CombatHealthSample? Outer)
+    {
+        public HudPlayerBreakContact? ContactEstimate { get; set; }
+    }
 
     public CombatHealthSample? BeginCombatHealth(Player? player, StructureSnapshot? snapshot, string kind, int timestamp)
     {
@@ -161,11 +174,16 @@ internal sealed partial class StructureTelemetry
             snapshot?.Structure is not { } structure || structure == null || Promote(structure) is not { Destroyed: false } entry)
             return null;
 
-        return new CombatHealthSample(player, entry.Key, kind, timestamp, data.HealthPoints, session.Segment);
+        var sample = new CombatHealthSample(player, entry.Key, kind, timestamp,
+            data.HealthPoints, session.Segment, activeCombatHealth);
+        Guard("player_break_contact_estimate", () => sample.ContactEstimate = ReadHudBreakEstimate(entry,
+            new CombatMeasurement(ReadCombatVelocity(snapshot.Velocity))));
+        return activeCombatHealth = sample;
     }
 
     public void EndCombatHealth(CombatHealthSample before, bool completed)
     {
+        activeCombatHealth = before.Outer;
         if (disposed || before.Segment != session.Segment)
             return;
 
@@ -208,11 +226,14 @@ internal sealed partial class StructureTelemetry
         }
 
         measurement ??= new CombatMeasurement(ReadCombatVelocity(snapshot.Velocity));
+        HudPlayerBreakContact? contactEstimate = null;
+        if (entry is not null && IsActive(entry))
+            Guard("player_break_contact_estimate", () => contactEstimate = ReadHudBreakEstimate(entry, measurement));
 
         session.CaptureGameplay(Time.frameCount, new GameplayObservation(default, null, kind,
             "CombatManager.OnProcessCombatEvent", actor, knownKey,
             entry?.Name ?? snapshot.StructureName, CombatTimestamp: timestamp,
-            Combat: measurement, IronBoots: ironBoots, JumpDiagram: jumpDiagram));
+            Combat: measurement, IronBoots: ironBoots, JumpDiagram: jumpDiagram, PlayerContactEstimate: contactEstimate));
     }
 
     private void RecordStructureCollision(StructureCollisionEvent collision, int timestamp)

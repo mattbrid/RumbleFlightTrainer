@@ -38,7 +38,7 @@ internal sealed record ContactObservation(
     ContactGeometry[] Points, int ReportedPointCount, Vec3? PairImpulseRaw, bool? PlayerIsSecondInNativePair,
     long? GeometryTick, StructureMotion? StructureAtFixedSample, string? Reason = null,
     double? ObservedFixedGameTimeSeconds = null, ContactFrames? Frames = null,
-    ImpactMotion? Impact = null, Vec3? RelativeLinearVelocity = null) : TraceRecord(Stamp);
+    ImpactMotion? Impact = null, Vec3? RelativeLinearVelocity = null, bool StructureSideProbe = false) : TraceRecord(Stamp);
 
 // A local-to-parent affine map. Its basis vectors preserve scale and shear.
 internal readonly record struct AffineFrame(Vec3 Origin, Vec3 XAxis, Vec3 YAxis, Vec3 ZAxis);
@@ -60,7 +60,7 @@ internal sealed record ColliderFrameReference(
 internal sealed record ContactBodyFrame(int BodyId, Pose WorldPose, Vec3 WorldCenterOfMass);
 internal sealed record ContactFrames(
     ColliderFrameReference? PlayerCollider, ColliderFrameReference? StructureCollider,
-    ContactBodyFrame? PlayerBody, AffineFrame? StructureRootWorld)
+    ContactBodyFrame? PlayerBody, AffineFrame? StructureRootWorld, Vec3? StructureCenterWorld = null)
 {
     public string Phase => "collision_callback";
 }
@@ -97,7 +97,8 @@ internal sealed record GameplayObservation(
     StructureKey? Structure = null, string? StructureName = null, StructureKey? OtherStructure = null,
     string? Detail = null, long? CombatTimestamp = null,
     CombatMeasurement? Combat = null, BreakAnalysis? Break = null, long? CollisionSequence = null,
-    IronBootsBreakEvidence? IronBoots = null, IronBootsApproach? JumpDiagram = null) : TraceRecord(Stamp);
+    IronBootsBreakEvidence? IronBoots = null, IronBootsApproach? JumpDiagram = null,
+    HudPlayerBreakContact? PlayerContactEstimate = null) : TraceRecord(Stamp);
 
 internal sealed record CombatVelocity(Vec3 Positional, Vec3 Angular);
 internal sealed record CombatMeasurement(CombatVelocity FirstStructure, CombatVelocity? SecondStructure = null,
@@ -110,7 +111,7 @@ internal sealed record CombatHealthObservation(TraceStamp Stamp, long? Tick, Str
 
 internal sealed record BreakAnalysis(
     TraceStamp? KillRequest, BreakCandidate[] Candidates, bool TimelineComplete,
-    long? DirectCollisionSequence = null)
+    long? DirectCollisionSequence = null, HudPlayerBreakContact? ObservedPlayerContact = null)
 {
     public BreakCandidate? Match
     {
@@ -143,18 +144,25 @@ internal sealed record BreakAnalysis(
             return damagingHit;
         }
     }
+    public HudPlayerBreakContact? PlayerContact => ObservedPlayerContact ?? Match?.PlayerContact;
 }
 
 internal sealed record BreakCandidate(TraceStamp Stamp, long? Tick, string Event, short? Actor,
     StructureKey? Counterpart, string? CounterpartName, long? CombatTimestamp, CombatMeasurement? Combat,
     BreakImpact? Impact, float? LinearImpactMetersPerSecond = null, string? Environment = null,
     IronBootsBreakEvidence? IronBoots = null, IronBootsApproach? JumpDiagram = null,
+    HudPlayerBreakContact? PlayerContact = null, HudPlayerBreakContact? PlayerContactEstimate = null,
     int? PlayerDamage = null);
 
 internal sealed record BreakImpact(TraceStamp Stamp, long Tick, string Phase, int BreakingBodyId, int? CounterpartBodyId,
     int ReportedPointCount, double? BreakingSampleAgeSeconds, double? CounterpartSampleAgeSeconds,
-    ImpactSpeed[] Points, ImpactSpeed? GameContactSpeed = null);
-internal sealed record ImpactSpeed(Vec3 PointWorld, float RelativeMetersPerSecond, float? ClosingMetersPerSecond);
+    ImpactSpeed[] Points, ImpactSpeed? GameContactSpeed = null, bool LinearEstimate = false)
+{
+    public ImpactSpeed? DisplayPoint => GameContactSpeed ?? Points
+        .MaxBy(point => (MathF.Max(0, point.ClosingMetersPerSecond ?? 0), point.RelativeMetersPerSecond));
+}
+internal sealed record ImpactSpeed(Vec3 PointWorld, float RelativeMetersPerSecond, float? ClosingMetersPerSecond,
+    System.Numerics.Vector3 RelativeVelocityWorld, System.Numerics.Vector3? NormalTowardCounterpart);
 internal sealed record TraceEvent(
     TraceStamp Stamp, string Event, string Source, long? LastPhysicsTick, string? Reason = null) : TraceRecord(Stamp);
 internal sealed record IronBootsContactStarted(TraceStamp Stamp) : TraceRecord(Stamp);

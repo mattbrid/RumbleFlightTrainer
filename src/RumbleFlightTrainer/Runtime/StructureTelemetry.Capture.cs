@@ -144,6 +144,12 @@ internal sealed partial class StructureTelemetry
     private ContactObservation CaptureContactDetails(ContactObservation contact, Tracked entry, Collider? own,
         Collider other, Rigidbody? otherBody, double now)
     {
+        bool limited = !entry.Destroyed && RequestBody(otherBody, entry.Structure, entry.Key);
+        var impact = new ImpactMotion(
+            MotionAt(contact.PlayerBodyId, null, now, contact.ObservedFixedGameTimeSeconds),
+            MotionAt(contact.OtherBodyId, entry.Key, now, contact.ObservedFixedGameTimeSeconds),
+            "collision_callback", now, limited);
+        contact = contact with { Impact = impact };
         try
         {
             var root = entry.Structure.transform;
@@ -155,20 +161,46 @@ internal sealed partial class StructureTelemetry
             var playerPose = receiver == null ? null : new ContactBodyFrame(contact.PlayerBodyId,
                 ReadPose(receiver), ToVec3(receiver.worldCenterOfMass));
             var rootWorld = Frame(root.localToWorldMatrix);
-            var frames = new ContactFrames(playerShape, structureShape, playerPose, rootWorld);
-            bool limited = RequestBody(otherBody, entry.Structure, entry.Key);
-            var impact = new ImpactMotion(
-                MotionAt(contact.PlayerBodyId, null, now, contact.ObservedFixedGameTimeSeconds),
-                MotionAt(contact.OtherBodyId, entry.Key, now, contact.ObservedFixedGameTimeSeconds),
-                "collision_callback", now, limited);
-
-            return contact with { Frames = frames, Impact = impact };
+            var structureCenter = otherBody == null ? other.bounds.center : otherBody.worldCenterOfMass;
+            var frames = new ContactFrames(playerShape, structureShape, playerPose, rootWorld, ToVec3(structureCenter));
+            return contact with { Frames = frames };
         }
         catch (Exception error)
         {
             ReportFailure("contact_geometry_capture", error);
             return contact;
         }
+    }
+
+    internal void CaptureStructureSidePlayerContact(Structure structure, Collision collision, string phase)
+    {
+        if (disposed || structure == null || collision == null || session.LastPhysicsTick is not { } tick)
+            return;
+        var playerCollider = collision.collider;
+        var playerBody = playerCollider == null ? null : playerCollider.attachedRigidbody;
+        if (playerBody == null || !receivingBodies.ContainsKey(playerBody.GetInstanceID()) || playerCollider == null)
+            return;
+
+        var nativePair = collision.m_Pair;
+        var structureCollider = collision.Flipped ? nativePair.otherCollider : nativePair.collider;
+        int count = collision.contactCount;
+        if (structureCollider == null || count == 0)
+            return;
+        var pair = new ContactKey(playerCollider.GetInstanceID(), structureCollider.GetInstanceID());
+        var entry = FindContactEntry(structure, tick);
+        if (entry is null || contacts.TryGetValue(pair, out var existing) &&
+            existing.Last.Structure == entry.Key && existing.Last.GeometryTick == tick && existing.Last.Points.Length > 0)
+            return;
+
+        var structureBody = structureCollider.attachedRigidbody;
+        var points = ReadPlayerContactPoints(collision, structure.transform, count, structureSide: true);
+        var observation = new ContactObservation(default, null, phase, pair, PlayerHitbox(pair.PlayerColliderId),
+            playerBody.GetInstanceID(), structureBody == null ? null : structureBody.GetInstanceID(), "structure",
+            structureCollider.gameObject.layer, entry.Key, entry.Name, points, count, null, !collision.Flipped, tick, null,
+            ObservedFixedGameTimeSeconds: Time.inFixedTimeStep ? Time.fixedTimeAsDouble : null,
+            RelativeLinearVelocity: TryCollisionLinearVelocity(collision), StructureSideProbe: true);
+        session.CaptureContact(Time.frameCount, CaptureContactDetails(observation, entry, playerCollider, structureCollider,
+            structureBody, session.ElapsedSeconds));
     }
 
     public void OnStructureCollision(Structure first, Structure second, Collision collision)
@@ -283,7 +315,7 @@ internal sealed partial class StructureTelemetry
     {
         try
         {
-            // This build strips Collision.relativeVelocity. Only the header vector's magnitude is used.
+            // This installed build strips Collision.relativeVelocity. Preserve the native pair order here.
             var velocity = ToVec3(collision.m_Header.m_RelativeVelocity);
             return Finite(velocity) ? velocity : null;
         }

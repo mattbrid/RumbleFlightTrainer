@@ -74,7 +74,32 @@ internal sealed class FlightBreakTimeline
         bool complete = probesAvailable && oldest > droppedThrough &&
             !history.OfType<StructureImpactGap>().Any(gap => gap.Structure == key || gap.OtherStructure == key ||
                 (gap.Structure is null && gap.OtherStructure is null));
-        return new BreakAnalysis(kill?.Stamp, candidates.ToArray(), complete, directCollision);
+        var analysis = new BreakAnalysis(kill?.Stamp, candidates.ToArray(), complete, directCollision);
+        var match = analysis.Match;
+        if (directCollision is not null || match is { Event: "structure_collision" or "environment_collision" } ||
+            match?.PlayerContact is { Placement: not null, NormalMetersPerSecond: not null })
+            return analysis;
+
+        // A physical touch can be retained even when processed events do not identify the break's cause.
+        var observed = match?.PlayerContact;
+        var atDestruction = (impactTick ?? match?.Tick) is { } tick ? MatchPlayerContact(key, tick) : null;
+        if (atDestruction is null && history.OfType<ContactObservation>().LastOrDefault(row =>
+            row.Structure == key && row.Reason == "structure_destroyed") is { GeometryTick: { } lastTick } closed)
+            atDestruction = history.OfType<ContactObservation>().LastOrDefault(row => row.Structure == key &&
+                row.Pair == closed.Pair && row.PhysicsTick == lastTick && row.Phase is "enter" or "stay" && row.Points.Length > 0);
+        if (atDestruction is { PhysicsTick: { } contactTick } contact)
+        {
+            var step = history.OfType<PhysicsSample>().LastOrDefault(row => row.Tick == contactTick);
+            var atBreak = CapturePlayerBreakContact(key, contactTick, contact, PlayerImpact(contact, contactTick),
+                step, contactTick == match?.Tick ? match?.Combat : null);
+            if (atBreak is { NormalMetersPerSecond: not null } || observed is null)
+                observed = atBreak;
+        }
+        var solePlayerCandidate = candidates.Count == 1 && candidates[0].Actor == localActor ? candidates[0] : null;
+        var estimate = end.PlayerContactEstimate;
+        if (estimate?.NormalMetersPerSecond is null)
+            estimate = (match ?? solePlayerCandidate)?.PlayerContactEstimate ?? estimate;
+        return analysis with { ObservedPlayerContact = observed?.Placement is not null ? observed : estimate ?? observed };
     }
 
     private BreakCandidate Candidate(GameplayObservation combat, StructureKey key, long? impactTick)
@@ -88,6 +113,7 @@ internal sealed class FlightBreakTimeline
         float? linearSpeed = null;
         IronBootsBreakEvidence? ironBoots = null;
         IronBootsApproach? jumpDiagram = null;
+        HudPlayerBreakContact? playerContact = null;
         int? playerDamage = null;
         if (combat.LastPhysicsTick is { } tick)
         {
@@ -110,14 +136,23 @@ internal sealed class FlightBreakTimeline
                     playerDamage = history.OfType<CombatHealthObservation>().Where(row =>
                             row.Structure == key && row.Event == combat.Event && row.Tick == tick && row.CombatTimestamp == timestamp)
                         .Select(row => row.Damage).Max();
-                var contact = MatchPlayerContact(key, tick);
-                impact = contact is null ? null : PlayerImpact(contact, tick);
+                var contact = MatchPlayerContact(key, tick) ?? history.OfType<ContactObservation>().LastOrDefault(row =>
+                    row.Structure == key && row.PhysicsTick < tick && row.Phase == "enter" && row.Points.Length > 0);
+                var fixedStep = history.OfType<PhysicsSample>().LastOrDefault(row => row.Tick == tick);
+                if (contact is { PhysicsTick: { } contactTick })
+                {
+                    impact = PlayerImpact(contact, contactTick);
+                    var contactStep = contactTick == tick ? fixedStep :
+                        history.OfType<PhysicsSample>().LastOrDefault(row => row.Tick == contactTick);
+                    playerContact = CapturePlayerBreakContact(key, contactTick, contact, impact, contactStep,
+                        contactTick == tick ? combat.Combat : null);
+                }
                 if (contact?.Impact?.Second?.Sample.Frozen != true)
                     linearSpeed = FiniteSpeed(contact?.RelativeLinearVelocity);
                 if (combat.Combat is { } snapshots)
                 {
                     var gamePlayer = snapshots.PlayerPhysicsBody?.Positional;
-                    var fixedPlayer = history.OfType<PhysicsSample>().LastOrDefault(row => row.Tick == tick)?.Physics.LinearVelocityWorld;
+                    var fixedPlayer = fixedStep?.Physics.LinearVelocityWorld;
                     if ((gamePlayer ?? fixedPlayer) is { } player)
                         linearSpeed ??= FiniteSpeed(FlightContactPatches.Vector(snapshots.FirstStructure.Positional) -
                             FlightContactPatches.Vector(player));
@@ -134,25 +169,92 @@ internal sealed class FlightBreakTimeline
         return new BreakCandidate(combat.Stamp, combat.LastPhysicsTick, combat.Event, combat.Actor,
             structurePair ? counterpart : null, structurePair ? (breakingFirst ? combat.Detail : combat.StructureName) : null,
             combat.CombatTimestamp, combat.Combat, impact, linearSpeed, IronBoots: ironBoots, JumpDiagram: jumpDiagram,
+            PlayerContact: playerContact, PlayerContactEstimate: structurePair ? null : combat.PlayerContactEstimate,
             PlayerDamage: playerDamage);
     }
 
     private ContactObservation? MatchPlayerContact(StructureKey key, long tick)
     {
-        // The processed event can precede the local collision callback within the same fixed tick.
-        var pairs = history.OfType<ContactObservation>().Where(row => row.Structure == key && row.PhysicsTick == tick &&
-            row.Phase is "enter" or "stay")
-            .GroupBy(row => row.Pair).Take(2).ToArray();
-        return pairs.Length == 1 ? pairs[0].Last() : null;
+        // Hits can be processed on the step after the first physical contact.
+        return history.OfType<ContactObservation>().Where(row => row.Structure == key &&
+                row.PhysicsTick >= tick - 1 && row.PhysicsTick <= tick &&
+                row.Points.Length > 0 && row.Phase is "enter" or "stay")
+            .GroupBy(row => (row.PhysicsTick, row.Pair))
+            .Select(pair => pair.MaxBy(row => (HasMotion(row), !row.StructureSideProbe, row.Stamp.Sequence))!)
+            .MaxBy(row => (HasMotion(row), row.Phase == "enter", row.PhysicsTick, -row.Points.Min(point => point.Separation)));
+
+        static bool HasMotion(ContactObservation row) =>
+            FlightContactPatches.StructureRelativeLinearVelocity(row) is not null ||
+            row.Impact is { First.SameFixedStep: true, Second.SameFixedStep: true };
+    }
+
+    private static HudPlayerBreakContact? CapturePlayerBreakContact(StructureKey key, long tick, ContactObservation contact,
+        BreakImpact? impact, PhysicsSample? fixedStep, CombatMeasurement? combat)
+    {
+        var impactPoint = impact?.DisplayPoint;
+        var point = impactPoint is { } measured
+            ? contact.Points.FirstOrDefault(point => point.PointWorld == measured.PointWorld)
+            : contact.Points.Where(point => FlightContactPatches.IsFinite(FlightContactPatches.Vector(point.PointWorld)))
+                .MinBy(point => point.Separation);
+        if (point is null)
+            return null;
+
+        Vector3? relative = impactPoint?.RelativeVelocityWorld;
+        float? normalSpeed = impactPoint?.ClosingMetersPerSecond;
+        bool linearEstimate = impact?.LinearEstimate == true;
+        if (relative is null && FlightContactPatches.StructureRelativeLinearVelocity(contact) is { } header)
+        {
+            relative = header;
+            normalSpeed = ProjectOnNormal(header, FlightContactPatches.Vector(point.NormalTowardPlayer));
+            linearEstimate = true;
+        }
+        if (relative is null && combat is not null && contact.OtherBodyId is { } structureBody &&
+            contact.Frames?.StructureCollider?.Definition?.Descriptor.ReferenceBodyId == structureBody &&
+            contact.Impact?.Second?.Sample.Frozen != true &&
+            UsableImpact(contact.Impact?.First, contact.PlayerBodyId, tick, contact.Stamp, false))
+        {
+            var estimate = FlightContactPatches.Vector(combat.FirstStructure.Positional) -
+                FlightContactPatches.Vector(contact.Impact!.First!.Sample.Body.LinearVelocityWorld);
+            if (FiniteSpeed(estimate) is not null)
+            {
+                relative = estimate;
+                normalSpeed = ProjectOnNormal(estimate, FlightContactPatches.Vector(point.NormalTowardPlayer));
+                linearEstimate = true;
+            }
+        }
+
+        HudContactPlacement? placement = null;
+        HudContactPatch? patch = null;
+        if (fixedStep is not null && HudBodyFrame.From(fixedStep.Physics) is { } origin)
+        {
+            var collider = contact.Frames is { } frames
+                ? HudStructureCollider.Resolve(key, contact.Pair, contact.Stamp.Segment, tick, frames, null, null)
+                : null;
+            var player = HudPlayerCollider.Build(contact.Pair, contact.Stamp.Segment, contact.PlayerBodyId,
+                contact.Frames, contact.Frames?.PlayerBody?.WorldPose);
+            placement = collider?.Place(origin, player, tick) ?? new HudContactPlacement(origin, player, null);
+            patch = FlightContactPatches.Build(new[] { point }, origin)[0];
+            if (impactPoint?.NormalTowardCounterpart is { } normal)
+                patch = patch with { BodyNormal = Vector3.Transform(normal, Quaternion.Conjugate(origin.Yaw)) };
+        }
+
+        var center = placement?.Box?.Center ?? placement?.Mesh?.Center ??
+            FlightContactPatches.Vector(contact.Frames?.StructureCenterWorld ?? point.PointWorld);
+        if (!FlightContactPatches.IsFinite(center))
+            center = FlightContactPatches.Vector(point.PointWorld);
+        return new HudPlayerBreakContact(placement, patch, center, relative, normalSpeed, linearEstimate,
+            PlayerColliderId: contact.Pair.PlayerColliderId);
     }
 
     private static BreakImpact? PlayerImpact(ContactObservation contact, long tick)
     {
         if (contact.OtherBodyId is not { } structureBody)
             return null;
-        return MeasureImpact(contact.Stamp, tick, "collision_callback", structureBody, contact.PlayerBodyId, false, true,
+        return MeasureImpact(contact.Stamp, tick, contact.StructureSideProbe ? "structure_collision_callback" : "collision_callback",
+            structureBody, contact.PlayerBodyId, false, true,
             contact.Impact?.Second, contact.Impact?.First, contact.ReportedPointCount,
-            contact.Points.Select(point => new ImpactPoint(point.PointWorld, point.NormalTowardPlayer, point.Separation)));
+            contact.Points.Select(point => new ImpactPoint(point.PointWorld, point.NormalTowardPlayer, point.Separation)),
+            linearRelative: FlightContactPatches.StructureRelativeLinearVelocity(contact));
     }
 
     private StructureImpactObservation? MatchRegistration(GameplayObservation combat, StructureKey key, StructureKey? counterpart, long tick)
@@ -174,10 +276,17 @@ internal sealed class FlightBreakTimeline
         var other = breakingFirst ? registration.Second : registration.First;
         if (breaking.BodyId is not { } structureBody || other.BodyId is not { } otherBody)
             return null;
+        Vector3? linear = null;
+        if (combat.Combat is { SecondStructure: { } second } snapshots)
+        {
+            var firstMinusSecond = FlightContactPatches.Vector(snapshots.FirstStructure.Positional) -
+                FlightContactPatches.Vector(second.Positional);
+            linear = combat.Structure == key ? firstMinusSecond : -firstMinusSecond;
+        }
         return MeasureImpact(registration.Stamp, tick, registration.Motion.ObservationPhase, structureBody, otherBody,
             true, registration.NormalConvention == "toward_first", breakingFirst ? registration.Motion.First : registration.Motion.Second,
             breakingFirst ? registration.Motion.Second : registration.Motion.First, registration.ReportedPointCount,
-            registration.Points, negateNormal: breakingFirst, gamePoint: combat.Combat?.CollisionPoint);
+            registration.Points, negateNormal: breakingFirst, gamePoint: combat.Combat?.CollisionPoint, linearRelative: linear);
     }
 
     private static bool IsWall(StructureImpactObservation hit) => hit.Points is { Length: > 0 } &&
@@ -200,13 +309,16 @@ internal sealed class FlightBreakTimeline
 
     private static BreakImpact MeasureImpact(TraceStamp stamp, long tick, string phase, int breakingId, int? otherId,
         bool otherIsStructure, bool normalKnown, AgedMotionSample? breaking, AgedMotionSample? other, int pointCount,
-        IEnumerable<ImpactPoint> points, bool negateNormal = false, Vec3? gamePoint = null, bool staticCounterpart = false)
+        IEnumerable<ImpactPoint> points, bool negateNormal = false, Vec3? gamePoint = null, bool staticCounterpart = false,
+        Vector3? linearRelative = null)
     {
         var speeds = new List<ImpactSpeed>();
         ImpactSpeed? atGamePoint = null;
-        if (UsableImpact(breaking, breakingId, tick, stamp, true) && (staticCounterpart ||
+        bool hasPointMotion = UsableImpact(breaking, breakingId, tick, stamp, true) && (staticCounterpart ||
             otherId is { } id && UsableImpact(other, id, tick, stamp, otherIsStructure) &&
-            breaking!.Sample.FixedGameTimeSeconds == other!.Sample.FixedGameTimeSeconds))
+            breaking!.Sample.FixedGameTimeSeconds == other!.Sample.FixedGameTimeSeconds);
+        bool useLinear = !hasPointMotion && linearRelative is { } linear && FiniteSpeed(linear) is not null;
+        if (hasPointMotion || useLinear)
         {
             float nearestDistance = float.PositiveInfinity;
             foreach (var point in points)
@@ -227,20 +339,33 @@ internal sealed class FlightBreakTimeline
             }
         }
         return new BreakImpact(stamp, tick, phase, breakingId, otherId, pointCount,
-            breaking?.AgeSeconds, other?.AgeSeconds, speeds.ToArray(), atGamePoint);
+            breaking?.AgeSeconds, other?.AgeSeconds, speeds.ToArray(), atGamePoint, LinearEstimate: useLinear);
 
         ImpactSpeed? AtPoint(Vec3 worldPoint, Vec3 worldNormal)
         {
             var position = FlightContactPatches.Vector(worldPoint);
-            var relative = PointVelocity(breaking!.Sample.Body, position) -
-                (staticCounterpart ? Vector3.Zero : PointVelocity(other!.Sample.Body, position));
+            if (!FlightContactPatches.IsFinite(position))
+                return null;
+            var relative = hasPointMotion
+                ? PointVelocity(breaking!.Sample.Body, position) -
+                    (staticCounterpart ? Vector3.Zero : PointVelocity(other!.Sample.Body, position))
+                : linearRelative!.Value;
             if (FiniteSpeed(relative) is not { } magnitude)
                 return null;
             var normal = FlightContactPatches.Vector(worldNormal);
-            float? closing = normalKnown && FlightContactPatches.IsFinite(normal) && normal.LengthSquared() > 1e-8f
-                ? Vector3.Dot(relative, Vector3.Normalize(negateNormal ? -normal : normal)) : null;
-            return new ImpactSpeed(worldPoint, magnitude, closing);
+            var unit = normalKnown ? UnitContactNormal(negateNormal ? -normal : normal) : null;
+            float? closing = unit is { } direction ? Vector3.Dot(relative, direction) : null;
+            return new ImpactSpeed(worldPoint, magnitude, closing, relative, unit);
         }
+    }
+
+    private static float? ProjectOnNormal(Vector3 relative, Vector3 normal) =>
+        UnitContactNormal(normal) is { } unit ? Vector3.Dot(relative, unit) : null;
+
+    private static Vector3? UnitContactNormal(Vector3 normal)
+    {
+        var lengthSquared = normal.LengthSquared();
+        return float.IsFinite(lengthSquared) && lengthSquared > 1e-8f ? normal / MathF.Sqrt(lengthSquared) : null;
     }
 
     private static float? FiniteSpeed(Vec3? velocity) =>

@@ -63,7 +63,7 @@ internal sealed partial class FlightHudView
                     DrawMesh(meshCount++, mesh, placement, wireframeColor, worldToView);
 
                 missingLocation |= DrawContactMarkers(geometry, placement, worldToView,
-                    color, pair.HasImpulse, lost: false, liveMarkers, ref liveMarkerCount);
+                    color, lost: false, liveMarkers, ref liveMarkerCount);
             }
 
             if (structure.NearbyGeometry is { } nearby)
@@ -89,14 +89,33 @@ internal sealed partial class FlightHudView
 
                     var lossToView = LossRotation(placement, bodyToView);
                     int previousMarkerCount = lostMarkerCount;
-                    DrawContactMarkers(geometry, placement, lossToView, color, measured: false, lost: true,
-                        lossMarkers, ref lostMarkerCount);
+                    bool replacedByImpact = loss.Break?.PlayerContact is { Placement: not null, Patch.WorldPoint: not null };
+                    if (!replacedByImpact)
+                        DrawContactMarkers(geometry, placement, lossToView, color, lost: true,
+                            lossMarkers, ref lostMarkerCount);
                     int colliderId = geometry.Pair.PlayerColliderId;
-                    if (lostMarkerCount > previousMarkerCount &&
+                    if ((lostMarkerCount > previousMarkerCount || replacedByImpact && placement.Player is not null) &&
                         (!retainedPlayerColliders.TryGetValue(colliderId, out var previous) || geometry.Tick > previous.Tick))
                         retainedPlayerColliders[colliderId] = geometry;
                 }
             }
+        }
+
+        foreach (var broken in frame.Breaks)
+        {
+            if (broken.PlayerContact is not { Placement: { } impactPlacement, Patch: { WorldPoint: { } point } patch } impact)
+                continue;
+            var marker = GetMarker(lossMarkers, lostMarkerCount++, lost: true);
+            var rotation = LossRotation(impactPlacement, bodyToView);
+            if (impactPlacement.Player is { } player)
+            {
+                point = player.PointOnSurface(point) ?? player.PointOnSurface(impact.CenterWorld) ?? point;
+                if (impact.PlayerColliderId is { } id && drawnPlayerColliders.Add(id))
+                    DrawPlayerCollider(playerColliderCount++, player, impactPlacement, rotation, lastHitbox);
+            }
+            DrawMarker(marker, patch, rotation * ToUnity(impactPlacement.Offset(point)), bodyToView,
+                StructureMaterial(broken.Key), measured: !impact.EstimatedContact);
+            marker.Span.enabled = false;
         }
 
         foreach (var (colliderId, geometry) in retainedPlayerColliders)
@@ -124,16 +143,18 @@ internal sealed partial class FlightHudView
         bodyToView * Quaternion.Inverse(ToUnity(placement.Origin.Yaw));
 
     private bool DrawContactMarkers(HudPairGeometry geometry, HudContactPlacement? placement, Quaternion worldToHud,
-        Material color, bool measured, bool lost, List<Marker> pool, ref int count)
+        Material color, bool lost, List<Marker> pool, ref int count)
     {
-        if (placement?.Player is null)
+        if (placement is null)
             return true;
 
         var directionToHud = worldToHud * ToUnity(placement.Origin.Yaw);
         bool missing = geometry.Patches.Length == 0;
         foreach (var patch in geometry.Patches)
         {
-            if (placement.MarkerPoint(patch) is not { } point)
+            var markerPoint = lost && patch.WorldPoint is { } worldPoint
+                ? placement.Player?.PointOnSurface(worldPoint) ?? worldPoint : placement.MarkerPoint(patch);
+            if (markerPoint is not { } point)
             {
                 missing = true;
                 continue;
@@ -141,7 +162,7 @@ internal sealed partial class FlightHudView
 
             var position = worldToHud * ToUnity(placement.Offset(point));
             var marker = GetMarker(pool, count++, lost);
-            DrawMarker(marker, patch, position, directionToHud, color, measured);
+            DrawMarker(marker, patch, position, directionToHud, color, measured: true);
             marker.Span.enabled = patch.Points.Length > 1;
             if (marker.Span.enabled)
             {

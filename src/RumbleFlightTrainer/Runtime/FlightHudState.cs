@@ -4,7 +4,13 @@ namespace RumbleFlightTrainer;
 
 internal enum HudLossKind { Separated, SeparatedIntact, Broken, SignalLost }
 internal sealed record HudLossMark(HudPairGeometry[] Contacts, HudLossKind Kind, double TimeSeconds, HudBreak? Break = null);
-internal sealed record HudBreak(StructureKey Key, string? Name, BreakAnalysis? Analysis, double TimeSeconds);
+internal sealed record HudBreak(StructureKey Key, string? Name, BreakAnalysis? Analysis, double TimeSeconds)
+{
+    public HudPlayerBreakContact? PlayerContact => Analysis?.PlayerContact;
+}
+internal sealed record HudPlayerBreakContact(HudContactPlacement? Placement, HudContactPatch? Patch, Vector3 CenterWorld,
+    Vector3? RelativeVelocityWorld, float? NormalMetersPerSecond, bool LinearEstimate, bool EstimatedContact = false,
+    int? PlayerColliderId = null);
 
 internal sealed record HudPairGeometry(
     ContactKey Pair, long? Tick, HudContactPatch[] Patches, HudContactPlacement? Placement);
@@ -27,15 +33,18 @@ internal sealed record HudStructureFrame(
 internal sealed record FlightHudFrame(
     Quaternion BodyYaw, Vector3 PushWorld, HudStructureFrame[] Structures,
     int TouchingCount, int MeasuredCount, bool PartialImpulse, bool ObserverAvailable, long? GeometryTick,
-    HudBreak? RecentBreak = null)
+    HudBreak[] Breaks)
 {
+    public HudBreak? RecentBreak => Breaks.LastOrDefault(broken => broken.PlayerContact is not null) ?? Breaks.LastOrDefault();
+
     public string? Outcome
     {
         get
         {
             var last = Structures.SelectMany(structure => structure.Losses)
                 .MaxBy(loss => loss.Break?.TimeSeconds ?? loss.TimeSeconds);
-            if (RecentBreak is { } recent && (last is null || recent.TimeSeconds >= (last.Break?.TimeSeconds ?? last.TimeSeconds)))
+            if (RecentBreak is { } recent && (recent.PlayerContact?.Placement is not null ||
+                last is null || recent.TimeSeconds >= (last.Break?.TimeSeconds ?? last.TimeSeconds)))
                 return FormatBreak(recent);
             if (last is null)
                 return null;
@@ -48,6 +57,20 @@ internal sealed record FlightHudFrame(
     private static string FormatBreak(HudBreak item)
     {
         var match = item.Analysis?.Match;
+        var description = DescribeBreak(match);
+        var contact = item.PlayerContact;
+        if (contact?.EstimatedContact == true)
+            description += "\nEstimated contact";
+        var normalSpeed = contact?.NormalMetersPerSecond ?? match?.Impact?.DisplayPoint?.ClosingMetersPerSecond;
+        if (normalSpeed is not { } speed)
+            return contact is { EstimatedContact: false } || match?.Impact is not null
+                ? description + "\nNormal speed unavailable" : description;
+        return description + FormattableString.Invariant($"\nNormal speed {speed:+0.0;-0.0;0.0} m/s") +
+            ((contact?.LinearEstimate ?? match?.Impact?.LinearEstimate) == true ? " (linear estimate)" : string.Empty);
+    }
+
+    private static string DescribeBreak(BreakCandidate? match)
+    {
         if (match?.IronBoots is { } boots)
             return boots.IsLowRelativeSpeed || match.PlayerDamage == 0
                 ? FormattableString.Invariant($"Structure Broke · Iron Boots ({boots.Alignment.AngleDegrees:F0}°)")
@@ -62,16 +85,6 @@ internal sealed record FlightHudFrame(
             "environment_collision" => $"hit {match.Environment}",
             _ => "cause unknown"
         };
-        if (match is null)
-            return $"Structure Broke · {cause}";
-
-        var impact = match.Impact;
-        var point = impact?.GameContactSpeed ?? impact?.Points
-            .MaxBy(point => (MathF.Max(0, point.ClosingMetersPerSecond ?? 0), point.RelativeMetersPerSecond));
-        if (point is not null)
-            return $"Structure Broke · {cause} · {point.RelativeMetersPerSecond:F1} m/s";
-        if (match.LinearImpactMetersPerSecond is { } linear)
-            return $"Structure Broke · {cause} · {linear:F1} m/s linear";
         return $"Structure Broke · {cause}";
     }
 }
@@ -79,30 +92,32 @@ internal sealed record FlightHudFrame(
 internal sealed class FlightHudState
 {
     private const int ImpulseWindowTicks = 4;
-    private const double MultipleContactLossSeconds = 3;
-    private const double BreakWithoutContactSeconds = 3;
+    internal const float DefaultContactHoldSeconds = 3f;
 
     private readonly int physicsBodyId;
+    private readonly double contactHoldSeconds;
     private readonly Dictionary<StructureKey, Structure> structures = new();
     private readonly Dictionary<ContactKey, StructureKey> activePairs = new();
     private readonly Dictionary<int, int> endedGenerations = new();
     private readonly HashSet<(ContactKey Pair, StructureKey Structure, long Tick)> measuredTicks = new();
+    private readonly List<HudBreak> breaks = new();
     private PhysicsSample? step;
     private Quaternion bodyYaw = Quaternion.Identity;
     private int? segment;
     private int touchingCount;
-    private long contactStarts;
-    private long? lossTick;
-    private int structuresAtFirstLoss;
     private bool observerAvailable = true;
-    private HudBreak? recentBreak;
 
-    public FlightHudState(int physicsBodyId) => this.physicsBodyId = physicsBodyId;
+    public FlightHudState(int physicsBodyId, double contactHoldSeconds = DefaultContactHoldSeconds)
+    {
+        this.physicsBodyId = physicsBodyId;
+        this.contactHoldSeconds = double.IsFinite(contactHoldSeconds) && contactHoldSeconds >= 0
+            ? contactHoldSeconds : DefaultContactHoldSeconds;
+    }
 
     private sealed class Structure
     {
         public Dictionary<ContactKey, Pair> Pairs { get; } = new();
-        public List<Loss> Losses { get; } = new();
+        public HudLossMark? Loss { get; set; }
         public List<HudPairGeometry> EndingContacts { get; } = new();
         public long? EndTick { get; set; }
     }
@@ -115,8 +130,6 @@ internal sealed class FlightHudState
         public HudPairGeometry Geometry { get; set; }
         public Queue<(long Tick, Vector3 World)> Impulses { get; } = new(ImpulseWindowTicks);
     }
-
-    private sealed record Loss(HudLossMark Mark, long ContactStarts, double EarliestClear, long EndTick);
 
     public void Observe(TraceRecord observation)
     {
@@ -132,7 +145,7 @@ internal sealed class FlightHudState
                 measuredTicks.RemoveWhere(impulse => impulse.Tick <= sample.Tick - ImpulseWindowTicks);
                 ConfirmContinuingLife(sample);
                 break;
-            case ContactObservation { Structure: { } structure } contact:
+            case ContactObservation { Structure: { } structure, StructureSideProbe: false } contact:
                 ObserveContact(contact, structure);
                 break;
             case GameplayObservation { Event: "structure_destroyed" or "structure_pool_return", Structure: { } key } end:
@@ -152,8 +165,9 @@ internal sealed class FlightHudState
         foreach (var (key, structure) in structures)
         {
             var nearbyGeometry = nearby is not null && !HasEnded(key) ? nearby.GetValueOrDefault(key) : null;
-            PruneLosses(structure, now, nearby is not null, nearbyGeometry is not null);
-            if (structure.Pairs.Count == 0 && structure.Losses.Count == 0)
+            if (structure.Loss is { } loss && now >= loss.TimeSeconds + contactHoldSeconds)
+                structure.Loss = null;
+            if (structure.Pairs.Count == 0 && structure.Loss is null)
             {
                 // Dictionary removal during enumeration is supported on .NET 6.
                 structures.Remove(key);
@@ -186,7 +200,7 @@ internal sealed class FlightHudState
                 measuredCount++;
             partial |= missing;
             result.Add(new HudStructureFrame(key, pairs, push / ImpulseWindowTicks, measured, missing,
-                structure.Losses.Select(loss => loss.Mark).ToArray(), nearbyGeometry));
+                structure.Loss is { } retained ? new[] { retained } : Array.Empty<HudLossMark>(), nearbyGeometry));
         }
 
         if (nearby is not null)
@@ -195,25 +209,10 @@ internal sealed class FlightHudState
                     result.Add(new HudStructureFrame(key, Array.Empty<HudPairFrame>(), Vector3.Zero,
                         false, false, Array.Empty<HudLossMark>(), colliders));
 
-        if (recentBreak is not null && now - recentBreak.TimeSeconds >= BreakWithoutContactSeconds)
-            recentBreak = null;
+        breaks.RemoveAll(broken => now >= broken.TimeSeconds + contactHoldSeconds);
 
         return new FlightHudFrame(bodyYaw, total / ImpulseWindowTicks, result.ToArray(),
-            touchingCount, measuredCount, partial, observerAvailable, geometryTick, recentBreak);
-    }
-
-    private void PruneLosses(Structure structure, double now, bool live, bool nearby)
-    {
-        if (!live)
-        {
-            structure.Losses.RemoveAll(loss => contactStarts > loss.ContactStarts && now >= loss.EarliestClear);
-            return;
-        }
-
-        if (!nearby || structure.Pairs.Count > 0)
-            structure.Losses.Clear();
-        else if (structure.Losses.Count > 1)
-            structure.Losses.RemoveRange(0, structure.Losses.Count - 1);
+            touchingCount, measuredCount, partial, observerAvailable, geometryTick, breaks.ToArray());
     }
 
     private void Reset(int newSegment)
@@ -224,11 +223,9 @@ internal sealed class FlightHudState
         step = null;
         bodyYaw = Quaternion.Identity;
         touchingCount = 0;
-        contactStarts = 0;
-        lossTick = null;
+        breaks.Clear();
         segment = newSegment;
         observerAvailable = true;
-        recentBreak = null;
     }
 
     private void ObserveContact(ContactObservation contact, StructureKey key)
@@ -276,7 +273,6 @@ internal sealed class FlightHudState
         if (structure.Pairs.Count == 0)
         {
             touchingCount++;
-            contactStarts++;
             structure.EndTick = null;
             structure.EndingContacts.Clear();
         }
@@ -299,16 +295,8 @@ internal sealed class FlightHudState
         if (structure.Pairs.Count != 0)
             return;
 
-        if (lossTick != endTick)
-        {
-            lossTick = endTick;
-            structuresAtFirstLoss = touchingCount;
-        }
-
-        bool multiple = Math.Max(touchingCount, structuresAtFirstLoss) > 1;
         touchingCount--;
-        structure.Losses.Add(new Loss(new HudLossMark(structure.EndingContacts.ToArray(), kind, now),
-            contactStarts, now + (multiple ? MultipleContactLossSeconds : 0), endTick));
+        structure.Loss = new HudLossMark(structure.EndingContacts.ToArray(), kind, now);
         structure.EndingContacts.Clear();
     }
 
@@ -318,7 +306,7 @@ internal sealed class FlightHudState
         bool broken = end.Event == "structure_destroyed";
         var explanation = broken ? new HudBreak(key, end.StructureName, end.Break, end.Stamp.TimeSeconds) : null;
         if (explanation is not null)
-            recentBreak = explanation;
+            breaks.Add(explanation);
         if (!structures.TryGetValue(key, out var structure))
             return;
 
@@ -326,13 +314,8 @@ internal sealed class FlightHudState
             EndPair(key, contact, end.LastPhysicsTick ?? step?.Tick ?? 0, end.Stamp.TimeSeconds,
                 broken ? HudLossKind.Broken : HudLossKind.SignalLost);
 
-        if (explanation is null)
-            return;
-        for (int i = 0; i < structure.Losses.Count; i++)
-        {
-            var loss = structure.Losses[i];
-            structure.Losses[i] = loss with { Mark = loss.Mark with { Kind = HudLossKind.Broken, Break = explanation } };
-        }
+        if (explanation is not null && structure.Loss is { } loss && end.Stamp.TimeSeconds - loss.TimeSeconds < contactHoldSeconds)
+            structure.Loss = loss with { Kind = HudLossKind.Broken, Break = explanation, TimeSeconds = end.Stamp.TimeSeconds };
     }
 
     private bool HasEnded(StructureKey key) =>
@@ -347,12 +330,8 @@ internal sealed class FlightHudState
         {
             if (!structures.TryGetValue(motion.Key, out var structure))
                 continue;
-            for (int i = 0; i < structure.Losses.Count; i++)
-            {
-                var loss = structure.Losses[i];
-                if (loss.Mark.Kind == HudLossKind.Separated && sample.Tick > loss.EndTick)
-                    structure.Losses[i] = loss with { Mark = loss.Mark with { Kind = HudLossKind.SeparatedIntact } };
-            }
+            if (structure.Loss is { Kind: HudLossKind.Separated } loss && sample.Tick > structure.EndTick)
+                structure.Loss = loss with { Kind = HudLossKind.SeparatedIntact };
         }
     }
 
@@ -360,20 +339,21 @@ internal sealed class FlightHudState
         int? receiverId, ContactGeometry[] points, ContactFrames? frames,
         FixedMotionSample? receiverMotion, FixedMotionSample? structureMotion, PhysicsSample? sample)
     {
-        var body = MainBodyAt(targetSegment, tick, sample);
-        var patches = FlightContactPatches.Build(points, receiverId == physicsBodyId || frames is not null ? body : null);
+        var body = receiverId == physicsBodyId || frames is not null ? MainBodyAt(targetSegment, tick, sample) : null;
+        var patches = FlightContactPatches.Build(points, body);
         HudContactPlacement? placement = null;
-        if (body is { } origin && tick is not null && points.Length > 0 && frames is not null)
+        if (body is { } origin && tick is not null && points.Length > 0)
         {
             Pose? receiverPose = receiverId == physicsBodyId ? sample!.Physics.BodyWorldPose : null;
             if (receiverPose is null && receiverMotion is { } motion &&
                 motion.Tick == tick && motion.Segment == targetSegment && motion.Body.BodyId == receiverId)
                 receiverPose = motion.Body.WorldPose;
-            if (receiverPose is null && frames.PlayerBody is { } callback && callback.BodyId == receiverId)
+            if (receiverPose is null && frames?.PlayerBody is { } callback && callback.BodyId == receiverId)
                 receiverPose = callback.WorldPose;
 
             var player = HudPlayerCollider.Build(pair, targetSegment, receiverId, frames, receiverPose);
-            var collider = HudStructureCollider.Resolve(key, pair, targetSegment, tick, frames, structureMotion, sample);
+            var collider = frames is not null ?
+                HudStructureCollider.Resolve(key, pair, targetSegment, tick, frames, structureMotion, sample) : null;
             placement = collider is { } observed
                 ? observed.Place(origin, player, tick)
                 : new HudContactPlacement(origin, player, null);
@@ -389,9 +369,7 @@ internal sealed class FlightHudState
         if (sample is null || sample.Tick != geometryTick || sample.Stamp.Segment != targetSegment)
             return null;
 
-        var center = FlightContactPatches.Vector(sample.Physics.WorldCenterOfMass);
-        var yaw = FlightContactPatches.Yaw(sample.Physics.BodyWorldPose.Rotation);
-        return FlightContactPatches.IsFinite(center) && yaw is { } rotation ? new HudBodyFrame(center, rotation) : null;
+        return HudBodyFrame.From(sample.Physics);
     }
 
     private static void ExpireImpulses(Pair pair, long? now)

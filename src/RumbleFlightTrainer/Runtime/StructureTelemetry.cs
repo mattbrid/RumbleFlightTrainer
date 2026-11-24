@@ -60,6 +60,7 @@ internal sealed partial class StructureTelemetry : IDisposable
         public bool CombatOnly { get; set; }
         public bool LocalModifierObserved { get; set; }
         public bool Destroyed { get; set; }
+        public long? DestructionTick { get; set; }
         public UnityEvent? DestroyedEvent { get; set; }
         public UnityAction? DestroyedListener { get; set; }
     }
@@ -140,7 +141,11 @@ internal sealed partial class StructureTelemetry : IDisposable
         }
 
         foreach (var key in expired)
+        {
+            if (tracked[key].Destroyed)
+                InvalidateImpactCapture(key);
             Forget(key);
+        }
 
         StartFixedCapture(tick, playerState, playerSampleSeconds);
         var motions = candidates.OrderByDescending(item => touchingKeys.Contains(item.Key))
@@ -199,11 +204,10 @@ internal sealed partial class StructureTelemetry : IDisposable
         if (structure is null || structure == null)
             return;
 
-        var entry = Promote(structure);
-        if (entry is null || entry.Destroyed)
-            return;
-
         long? tick = session.LastPhysicsTick;
+        var entry = FindContactEntry(structure, tick);
+        if (entry is null)
+            return;
         if (contacts.TryGetValue(key, out var prior) && prior.Last.GeometryTick == tick &&
             prior.Last.Phase == phase && prior.Last.Structure == entry.Key)
             return;
@@ -212,31 +216,52 @@ internal sealed partial class StructureTelemetry : IDisposable
 
         double observedAt = session.ElapsedSeconds;
         int count = collision.contactCount;
-        var points = new ContactGeometry[Math.Min(count, MaxContactPoints)];
-        var structureFrame = structure.transform;
-        for (int i = 0; i < points.Length; i++)
-        {
-            var point = collision.GetContact(i);
-            points[i] = new ContactGeometry(ToVec3(point.point), ToVec3(point.normal), point.separation,
-                ToVec3(structureFrame.InverseTransformPoint(point.point)),
-                ToVec3(structureFrame.InverseTransformDirection(point.normal)));
-        }
+        var points = ReadPlayerContactPoints(collision, structure.transform, count, structureSide: false);
 
         Vec3? impulse = count > 0 && impulsesThisTick.Add(key) ? ToVec3(collision.impulse) : null;
         var observation = new ContactObservation(default, null, phase, key,
-            key.PlayerColliderId == footId ? "foot" : key.PlayerColliderId == capsuleId ? "capsule" : "other",
+            PlayerHitbox(key.PlayerColliderId),
             receiverId, otherBody == null ? null : otherBody.GetInstanceID(), "structure",
-            layer, entry.Key, entry.Name, points, count, impulse, impulse.HasValue ? flipped : null,
+            layer, entry.Key, entry.Name, points, count, impulse, count > 0 ? flipped : null,
             tick,
             !sampledKeys.Contains(entry.Key) && nearby.TryGetValue(entry.Key, out var preSolve)
                 ? preSolve : null, ObservedFixedGameTimeSeconds: Time.inFixedTimeStep ? Time.fixedTimeAsDouble : null);
         if (count > 0)
             observation = CaptureContactDetails(observation with { RelativeLinearVelocity = TryCollisionLinearVelocity(collision) },
                 entry, own, other, otherBody, observedAt);
+        if (entry.Destroyed)
+        {
+            session.CaptureContact(Time.frameCount, observation);
+            return;
+        }
         contacts[key] = new ActiveContact(own, other, observation);
         if (tick is { } contactTick)
             SampleIronBoots(contactTick, observedAt, observation, entry, own, other);
         session.CaptureContact(Time.frameCount, observation);
+    }
+
+    private string PlayerHitbox(int colliderId) => colliderId == footId ? "foot" : colliderId == capsuleId ? "capsule" : "other";
+
+    private Tracked? FindContactEntry(Structure structure, long? tick)
+    {
+        if (TryTracked(structure, out var entry) && entry is { Destroyed: true })
+            return tick is not null && entry.DestructionTick == tick ? entry : null;
+        return Promote(structure);
+    }
+
+    private static ContactGeometry[] ReadPlayerContactPoints(Collision collision, Transform structure,
+        int count, bool structureSide)
+    {
+        var points = new ContactGeometry[Math.Min(count, MaxContactPoints)];
+        for (int i = 0; i < points.Length; i++)
+        {
+            var point = collision.GetContact(i);
+            // The structure-side receiver sees the opposite normal from the player's receiver.
+            var normal = structureSide ? -point.normal : point.normal;
+            points[i] = new ContactGeometry(ToVec3(point.point), ToVec3(normal), point.separation,
+                ToVec3(structure.InverseTransformPoint(point.point)), ToVec3(structure.InverseTransformDirection(normal)));
+        }
+        return points;
     }
 
     private void AddObserver(Rigidbody? receiver, HashSet<int> receivers)
