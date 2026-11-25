@@ -9,7 +9,8 @@ internal readonly record struct Quat(float X, float Y, float Z, float W);
 internal readonly record struct Pose(Vec3 Position, Quat Rotation);
 internal sealed record PhysicsState(
     double FixedGameTimeSeconds, float FixedDeltaSeconds, Pose BodyWorldPose, Vec3 WorldCenterOfMass,
-    Vec3 LinearVelocityWorld, Vec3 AngularVelocityWorld, bool Grounded, Vec3? GravityImpulseWorld = null);
+    Vec3 LinearVelocityWorld, Vec3 AngularVelocityWorld, bool Grounded,
+    Vec3? GravityImpulseWorld = null, bool UseCapsuleSupportCorrection = false);
 
 internal abstract record TraceRecord(TraceStamp Stamp);
 

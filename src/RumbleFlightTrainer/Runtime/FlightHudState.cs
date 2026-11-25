@@ -31,9 +31,9 @@ internal sealed record HudStructureFrame(
 }
 
 internal sealed record FlightHudFrame(
-    Quaternion BodyYaw, Vector3 PushWorld, HudStructureFrame[] Structures,
+    Quaternion BodyYaw, Vector3 ContactImpulseWorld, HudStructureFrame[] Structures,
     int TouchingCount, int MeasuredCount, bool PartialImpulse, bool ObserverAvailable, long? GeometryTick,
-    HudBreak[] Breaks)
+    HudBreak[] Breaks, Vector3 CombinedImpulseWorld, Vector3 GravityImpulseWorld)
 {
     public HudBreak? RecentBreak => Breaks.LastOrDefault(broken => broken.PlayerContact is not null) ?? Breaks.LastOrDefault();
 
@@ -93,6 +93,7 @@ internal sealed record FlightHudFrame(
 internal sealed class FlightHudState
 {
     private const int ImpulseWindowTicks = 4;
+    private const float CapsuleSupportFraction = 0.25f;
     internal const float DefaultContactHoldSeconds = 3f;
 
     private readonly int physicsBodyId;
@@ -102,6 +103,7 @@ internal sealed class FlightHudState
     private readonly Dictionary<int, int> endedGenerations = new();
     private readonly HashSet<(ContactKey Pair, StructureKey Structure, long Tick)> measuredTicks = new();
     private readonly List<HudBreak> breaks = new();
+    private readonly Queue<(long Tick, Vector3 World, bool Grounded)> gravityImpulses = new(ImpulseWindowTicks);
     private PhysicsSample? step;
     private Quaternion bodyYaw = Quaternion.Identity;
     private int? segment;
@@ -129,7 +131,7 @@ internal sealed class FlightHudState
             Geometry = new HudPairGeometry(contact, null, Array.Empty<HudContactPatch>(), null);
 
         public HudPairGeometry Geometry { get; set; }
-        public Queue<(long Tick, Vector3 World)> Impulses { get; } = new(ImpulseWindowTicks);
+        public Queue<(long Tick, Vector3 World, float SupportCorrection)> Impulses { get; } = new(ImpulseWindowTicks);
     }
 
     public void Observe(TraceRecord observation)
@@ -140,6 +142,7 @@ internal sealed class FlightHudState
         switch (observation)
         {
             case PhysicsSample sample:
+                ObserveGravity(sample);
                 step = sample;
                 bodyYaw = FlightContactPatches.Yaw(sample.Physics.BodyWorldPose.Rotation) ?? Quaternion.Identity;
                 observerAvailable = sample.StructureTelemetry?.ContactObserverAvailable == true;
@@ -159,6 +162,7 @@ internal sealed class FlightHudState
     {
         var result = new List<HudStructureFrame>(structures.Count);
         Vector3 total = Vector3.Zero;
+        float supportCorrection = 0;
         int measuredCount = 0;
         bool partial = false;
         long? geometryTick = null;
@@ -185,7 +189,10 @@ internal sealed class FlightHudState
                 ExpireImpulses(pair, step?.Tick);
                 Vector3 pairSum = Vector3.Zero;
                 foreach (var impulse in pair.Impulses)
+                {
                     pairSum += impulse.World;
+                    supportCorrection += impulse.SupportCorrection;
+                }
 
                 bool hasImpulse = pair.Impulses.Count > 0;
                 pairs[index++] = new HudPairFrame(pair.Geometry, pairSum / ImpulseWindowTicks, hasImpulse);
@@ -212,8 +219,35 @@ internal sealed class FlightHudState
 
         breaks.RemoveAll(broken => now >= broken.TimeSeconds + contactHoldSeconds);
 
+        Vector3 gravity = Vector3.Zero;
+        Vector3 airborneGravity = Vector3.Zero;
+        foreach (var impulse in gravityImpulses)
+        {
+            gravity += impulse.World;
+            if (!impulse.Grounded)
+                airborneGravity += impulse.World;
+        }
+
+        Vector3 combined = total - Vector3.UnitY * supportCorrection;
+        // Terrain support balances gravity while standing. Terrain is outside the structure sum.
+        if (step?.Physics.Grounded == false)
+            combined += airborneGravity;
         return new FlightHudFrame(bodyYaw, total / ImpulseWindowTicks, result.ToArray(),
-            touchingCount, measuredCount, partial, observerAvailable, geometryTick, breaks.ToArray());
+            touchingCount, measuredCount, partial, observerAvailable, geometryTick, breaks.ToArray(),
+            combined / ImpulseWindowTicks, gravity / ImpulseWindowTicks);
+    }
+
+    private void ObserveGravity(PhysicsSample sample)
+    {
+        while (gravityImpulses.TryPeek(out var impulse) && impulse.Tick <= sample.Tick - ImpulseWindowTicks)
+            gravityImpulses.Dequeue();
+
+        if (sample.Physics.GravityImpulseWorld is { } value)
+        {
+            var world = new Vector3(value.X, value.Y, value.Z);
+            if (float.IsFinite(world.LengthSquared()))
+                gravityImpulses.Enqueue((sample.Tick, world, sample.Physics.Grounded));
+        }
     }
 
     private void Reset(int newSegment)
@@ -221,6 +255,7 @@ internal sealed class FlightHudState
         structures.Clear();
         activePairs.Clear();
         measuredTicks.Clear();
+        gravityImpulses.Clear();
         step = null;
         bodyYaw = Quaternion.Identity;
         touchingCount = 0;
@@ -260,7 +295,10 @@ internal sealed class FlightHudState
             measuredTicks.Add((contact.Pair, key, impulseTick)))
         {
             ExpireImpulses(pair, impulseTick);
-            pair.Impulses.Enqueue((impulseTick, world));
+            bool applySupportCorrection = world.Y > 0 && contact.PlayerBodyId == physicsBodyId &&
+                contact.PlayerHitbox == "capsule" && step?.Tick == impulseTick && step.Physics.UseCapsuleSupportCorrection;
+            float correction = applySupportCorrection ? world.Y * (1 - CapsuleSupportFraction) : 0;
+            pair.Impulses.Enqueue((impulseTick, world, correction));
         }
     }
 

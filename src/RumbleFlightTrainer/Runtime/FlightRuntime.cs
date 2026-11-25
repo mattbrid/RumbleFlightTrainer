@@ -25,6 +25,8 @@ internal sealed class FlightRuntime
     private int? originId;
     private bool originObserved;
     private string? pendingStop;
+    private Rigidbody? supportVrBody;
+    private ConfigurableJoint? supportJoint;
 
     private FlightRuntime(Scene scene, PlayerController controller, PlayerMovement movement, Rigidbody body,
         MelonLogger.Instance logger, float ironBootsVerticalVelocityThreshold)
@@ -162,9 +164,14 @@ internal sealed class FlightRuntime
             int frame = Time.frameCount;
             double sampleSeconds = Observations.ElapsedSeconds;
             float fixedDelta = Time.fixedDeltaTime;
-            Vec3? gravityImpulse = body.useGravity && !body.isKinematic ? ToVec3(Physics.gravity * (body.mass * fixedDelta)) : null;
+            bool grounded = Movement.IsGrounded();
+            bool fixedSimulation = Physics.simulationMode == SimulationMode.FixedUpdate;
+            float? mass = body.isKinematic ? null : body.mass;
+            Vec3? gravityImpulse = fixedSimulation && mass is { } dynamicMass && body.useGravity
+                ? ToVec3(Physics.gravity * (dynamicMass * fixedDelta)) : null;
             var playerState = new PhysicsState(Time.fixedTimeAsDouble, fixedDelta, new Pose(ToVec3(body.position), ToQuat(body.rotation)),
-                ToVec3(body.worldCenterOfMass), ToVec3(body.linearVelocity), ToVec3(body.angularVelocity), Movement.IsGrounded(), gravityImpulse);
+                ToVec3(body.worldCenterOfMass), ToVec3(body.linearVelocity), ToVec3(body.angularVelocity), grounded,
+                gravityImpulse, fixedSimulation && !grounded && mass == 40f && HasValidatedSupportJoint());
             StructureFrame? structures = null;
             try
             {
@@ -182,6 +189,24 @@ internal sealed class FlightRuntime
             logger.Error($"Flight fixed-step observation failed: {error}");
             pendingStop = "fixed_capture_error";
         }
+    }
+
+    private bool HasValidatedSupportJoint()
+    {
+        var vr = Controller.PlayerPhysics?.VRrigidbody;
+        if (vr == null || vr == body || vr.isKinematic || vr.mass != 40f)
+            return false;
+
+        if (supportVrBody != vr || supportJoint == null || supportJoint.connectedBody != vr)
+        {
+            supportVrBody = vr;
+            supportJoint = body.GetComponents<ConfigurableJoint>()
+                .FirstOrDefault(joint => joint != null && joint.connectedBody == vr);
+        }
+
+        return supportJoint != null && supportJoint.massScale == 3f && supportJoint.connectedMassScale == 1f &&
+            supportJoint.yMotion == ConfigurableJointMotion.Locked &&
+            supportJoint.xMotion == ConfigurableJointMotion.Free && supportJoint.zMotion == ConfigurableJointMotion.Free;
     }
 
     internal static PlayerController? FindLocalController()

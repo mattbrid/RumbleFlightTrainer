@@ -39,7 +39,7 @@ public sealed class TrainerMod : MelonMod
         hudRequested = preferences.CreateEntry("HudEnabledOnStartup", true,
             description: "Enable the flight HUD in Gym and Park on startup. F8 toggles it for the current session.").Value;
         showPerStructureImpulse = preferences.CreateEntry("HudShowPerStructureImpulse", false,
-            description: "Also show the strongest individual contact impulse arrows.", oldIdentifier: "HudShowImpulse").Value;
+            description: "Also show the gravity arrow and strongest individual contact impulse arrows.", oldIdentifier: "HudShowImpulse").Value;
         showStructureVelocity = preferences.CreateEntry("HudShowStructureVelocity", false,
             description: "Show relative velocity arrows for nearby structures.").Value;
         showNormalSpeed = preferences.CreateEntry("HudShowNormalSpeed", true,

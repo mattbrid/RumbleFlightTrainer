@@ -33,6 +33,7 @@ internal sealed partial class FlightHudView : IDisposable
     private readonly Dictionary<StructureKey, int> structureColors = new();
     private readonly HashSet<StructureKey> displayedStructures = new();
     private readonly Arrow totalArrow;
+    private readonly Arrow? gravityArrow;
     private readonly Arrow[] branches = Array.Empty<Arrow>();
     private readonly List<Arrow> velocityArrows = new();
     private readonly bool showStructureVelocity;
@@ -75,9 +76,13 @@ internal sealed partial class FlightHudView : IDisposable
                 ColorMaterial(shader, Color.Lerp(Color.black, color, InactiveWireframeBrightness))).ToArray();
 
             var push = ColorMaterial(shader, new Color(0.62f, 1f, 0.81f));
-            totalArrow = CreateArrow(anchor, "Net push", push, 0.0045f, DrawOrder.NetPush);
+            totalArrow = CreateArrow(anchor, "Net impulse", push, 0.0045f, DrawOrder.NetPush);
             if (showPerStructureImpulse)
             {
+                var gravity = ColorMaterial(shader, new Color(0.82f, 0.84f, 0.95f));
+                gravityArrow = CreateArrow(anchor, "Gravity impulse", gravity, 0.002f, DrawOrder.StructurePush);
+                // Separate the arrows when net impulse and gravity coincide in free fall.
+                gravityArrow.Root.localPosition = Vector3.right * 0.024f;
                 var branchRoot = Child(anchor, "Structure pushes").transform;
                 branches = new Arrow[LiveBranchLimit];
                 for (int i = 0; i < branches.Length; i++)
@@ -142,7 +147,9 @@ internal sealed partial class FlightHudView : IDisposable
 
     private void DrawImpulses(FlightHudFrame frame, Quaternion worldToView)
     {
-        DrawPush(totalArrow, worldToView * ToUnity(frame.PushWorld));
+        DrawPush(totalArrow, worldToView * ToUnity(frame.CombinedImpulseWorld));
+        if (gravityArrow is { } gravity)
+            DrawPush(gravity, worldToView * ToUnity(frame.GravityImpulseWorld));
         if (branches.Length == 0)
             return;
         var live = frame.Structures.Where(item => item.Touching)
