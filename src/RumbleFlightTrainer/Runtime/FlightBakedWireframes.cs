@@ -15,7 +15,7 @@ internal static class FlightBakedWireframes
 
     public static bool HasBakedOutline(string? meshName) => meshName is
         "Ball" or "Structure_Ball" or "Structures_Ball" or
-        "SmallRock" or "Strucutre_SmallRock" or "LargeRock" or "Structure_Boulder";
+        "SmallRock" or "Strucutre_SmallRock" or "LargeRock" or "Structure_Boulder" or "Structure_Disc";
 
     public static MeshEdge[]? Match(ColliderShape shape, string gameVersion, Vec3 scale)
     {
@@ -31,7 +31,7 @@ internal static class FlightBakedWireframes
     {
         var assets = new Dictionary<string, Wireframe>(StringComparer.Ordinal);
         var assembly = Assembly.GetExecutingAssembly();
-        foreach (string name in new[] { "Ball", "SmallRock", "LargeRock" })
+        foreach (string name in new[] { "Ball", "SmallRock", "LargeRock", "Disk" })
         {
             using var stream = assembly.GetManifestResourceStream($"RumbleFlightTrainer.Wireframes.{name}.json");
             if (stream is not null && JsonSerializer.Deserialize<Wireframe>(stream, Json) is

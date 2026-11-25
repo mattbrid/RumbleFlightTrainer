@@ -379,9 +379,11 @@ internal sealed partial class StructureTelemetry
         if (shape is { Convex: true, MeshBounds: { } bounds })
         {
             var previous = definition?.Descriptor.Shape;
-            if (sampleMesh && FlightBakedWireframes.HasBakedOutline(shape.MeshName))
-                shape = shape with { MeshEdges = FlightBakedWireframes.Match(shape, session.GameVersion, ToVec3(transform.lossyScale)) };
+            if (sampleMesh &&
+                FlightBakedWireframes.Match(shape, session.GameVersion, ToVec3(transform.lossyScale)) is { } edges)
+                shape = shape with { MeshEdges = edges };
             else if ((previous is { MeshEdges: not null } or { MeshContours: not null }) &&
+                (!sampleMesh || previous.MeshEdges is null) &&
                 previous with { MeshContours = null, MeshEdges = null } == shape)
                 shape = previous;
             else if (sampleMesh)
@@ -423,9 +425,7 @@ internal sealed partial class StructureTelemetry
             var asset = mesh.sharedMesh;
             var shape = new ColliderShape("mesh", MeshId: asset == null ? null : asset.GetInstanceID(),
                 MeshName: asset == null ? null : asset.name, Convex: mesh.convex, CookingOptions: mesh.cookingOptions.ToString());
-            if (asset != null && shape is { Convex: true,
-                MeshName: "Ball" or "Structure_Ball" or "Structures_Ball" or "Structure_Disc" or
-                    "LargeRock" or "Structure_Boulder" or "SmallRock" or "Strucutre_SmallRock" })
+            if (asset != null && shape.Convex == true && FlightBakedWireframes.HasBakedOutline(shape.MeshName))
             {
                 try
                 {
