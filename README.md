@@ -20,7 +20,8 @@ With the game closed, edit `[RumbleFlightTrainer]` in `UserData/MelonPreferences
 | `HudShowNormalSpeedOnBreak` | `true` | Show the frozen normal-speed arrow on retained impacts. |
 | `HudShowStructureVelocity` | `false` | Show live relative velocity arrows. |
 | `HudShowVelocityOnBreak` | `false` | Show the frozen relative velocity arrow on retained impacts. |
-| `HudShowPerStructureImpulse` | `false` | Show gravity and the strongest individual contact impulses as separate arrows. |
+| `HudShowPerStructureImpulse` | `false` | Show the strongest individual contact impulses and a separate gravity arrow while airborne. |
+| `HudPerStructureImpulseAtContact` | `true` | Start individual impulse arrows at their contact dots. Set to `false` to start them at the HUD origin. |
 | `IronBootsVerticalVelocityThreshold` | `1.0` | Show Iron Boots feedback below this vertical speed, in m/s. Negative means downward. |
 | `IronBootsLastContactHoldSeconds` | `5.0` | Seconds to keep the Iron Boots **Last contact** diagram. `0` hides the retained diagram. |
 
@@ -34,7 +35,7 @@ Nearby structures have bright wireframes with dark outlines. The Disk uses a bak
 
 By default, each live structure's arrow points toward you while closing and away while separating. Its length shows the magnitude of normal speed. The optional live relative velocity arrow shows the structure's linear velocity minus yours. Both arrows have a length cap. Relative velocity arrows below 0.1 m/s are hidden.
 
-The mint arrow combines measured structure contact and airborne gravity over four physics steps. It points down in free fall. On the calibrated player rig, the HUD scales the upward main-capsule contact impulse when estimating support in the air. `HudShowPerStructureImpulse` adds a separate gravity arrow and up to two individual contact impulse arrows. It replaces `HudShowImpulse`.
+The mint arrow combines measured structure contact and airborne gravity over four physics steps. It points down in free fall. On the calibrated player rig, both the mint arrow and the individual arrows use 25% of the upward main-capsule contact impulse while airborne. `HudShowPerStructureImpulse` adds up to two individual contact impulse arrows and a pale gravity arrow that starts at the center of the player capsule and hides on landing. If a structure has several contact dots, its arrow uses a current dot from the strongest measured collider pair with a usable location. If no location is available, the arrow starts at the HUD origin. `HudShowPerStructureImpulse` replaces `HudShowImpulse`.
 
 ## Predicted hits
 

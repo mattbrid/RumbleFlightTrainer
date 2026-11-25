@@ -37,6 +37,7 @@ internal sealed partial class FlightHudView : IDisposable
     private readonly Arrow? gravityArrow;
     private readonly Arrow[] branches = Array.Empty<Arrow>();
     private readonly List<Arrow> velocityArrows = new();
+    private readonly bool perStructureImpulseAtContact;
     private readonly bool showStructureVelocity;
     private readonly bool showNormalSpeed;
     private readonly bool showVelocityOnBreak;
@@ -55,9 +56,10 @@ internal sealed partial class FlightHudView : IDisposable
         GameObject Root, HudLine Rim, HudLine Dot,
         HudLine Face, HudLine Span);
 
-    public FlightHudView(bool showPerStructureImpulse, bool showStructureVelocity, bool showNormalSpeed,
-        bool showVelocityOnBreak, bool showNormalSpeedOnBreak)
+    public FlightHudView(bool showPerStructureImpulse, bool perStructureImpulseAtContact, bool showStructureVelocity,
+        bool showNormalSpeed, bool showVelocityOnBreak, bool showNormalSpeedOnBreak)
     {
+        this.perStructureImpulseAtContact = perStructureImpulseAtContact;
         this.showStructureVelocity = showStructureVelocity;
         this.showNormalSpeed = showNormalSpeed;
         this.showVelocityOnBreak = showVelocityOnBreak;
@@ -83,8 +85,6 @@ internal sealed partial class FlightHudView : IDisposable
             {
                 var gravity = ColorMaterial(shader, new Color(0.82f, 0.84f, 0.95f));
                 gravityArrow = CreateArrow(anchor, "Gravity impulse", gravity, 0.002f, DrawOrder.StructurePush);
-                // Separate the arrows when net impulse and gravity coincide in free fall.
-                gravityArrow.Root.localPosition = Vector3.right * 0.024f;
                 var branchRoot = Child(anchor, "Structure pushes").transform;
                 branches = new Arrow[LiveBranchLimit];
                 for (int i = 0; i < branches.Length; i++)
@@ -132,9 +132,9 @@ internal sealed partial class FlightHudView : IDisposable
         AssignStructureColors(frame.Structures, frame.Breaks);
         DrawStructureVelocities(frame, velocities, worldToView, bodyToView);
         DrawNormalSpeedArrows(frame, velocities, worldToView, bodyToView);
-        DrawImpulses(frame, worldToView);
 
-        bool missingLocation = DrawContactGeometry(frame, worldToView, bodyToView, playerReference, hitWarnings);
+        var (missingLocation, capsuleCenter) = DrawContactGeometry(frame, worldToView, bodyToView, playerReference, hitWarnings);
+        DrawImpulses(frame, worldToView, capsuleCenter);
         DrawBreakOutlines(frame.Breaks, bodyToView);
         var outcome = frame.Outcome;
 
@@ -147,11 +147,15 @@ internal sealed partial class FlightHudView : IDisposable
         DrawIronBoots(headset, defaultHudPosition, ironBootsOffset, ironBoots);
     }
 
-    private void DrawImpulses(FlightHudFrame frame, Quaternion worldToView)
+    private void DrawImpulses(FlightHudFrame frame, Quaternion worldToView, Vector3? capsuleCenter)
     {
         DrawPush(totalArrow, worldToView * ToUnity(frame.CombinedImpulseWorld));
         if (gravityArrow is { } gravity)
-            DrawPush(gravity, worldToView * ToUnity(frame.GravityImpulseWorld));
+        {
+            gravity.Root.localPosition = capsuleCenter.GetValueOrDefault();
+            DrawPush(gravity, capsuleCenter.HasValue ? worldToView * ToUnity(frame.GravityImpulseWorld) : Vector3.zero,
+                narrowHead: true);
+        }
         if (branches.Length == 0)
             return;
         var live = frame.Structures.Where(item => item.Touching)
@@ -168,7 +172,10 @@ internal sealed partial class FlightHudView : IDisposable
             }
 
             var structure = live[i];
-            DrawPush(branches[i], worldToView * ToUnity(structure.PushWorld), StructureMaterial(structure.Key));
+            var contactOffset = perStructureImpulseAtContact ? structure.ImpulseContactOffset(frame.GeometryTick) : null;
+            var arrow = branches[i];
+            arrow.Root.localPosition = worldToView * ToUnity(contactOffset.GetValueOrDefault());
+            DrawPush(arrow, worldToView * ToUnity(structure.PushWorld), StructureMaterial(structure.Key), narrowHead: true);
         }
     }
 
@@ -275,7 +282,7 @@ internal sealed partial class FlightHudView : IDisposable
             arrows[i].Root.gameObject.SetActive(false);
     }
 
-    private static void DrawPush(Arrow arrow, Vector3 impulse, Material? color = null)
+    private static void DrawPush(Arrow arrow, Vector3 impulse, Material? color = null, bool narrowHead = false)
     {
         float magnitude = impulse.magnitude;
         bool visible = float.IsFinite(magnitude) && magnitude >= MinimumArrowImpulse;
@@ -288,8 +295,7 @@ internal sealed partial class FlightHudView : IDisposable
 
         Vector3 direction = impulse / magnitude;
         float length = 0.019f + 0.077f * Mathf.Clamp01(magnitude / FullArrowImpulse);
-        bool branch = color is not null;
-        SetArrowDirection(arrow, direction, length, branch ? 0.012f : 0.016f, branch ? 0.006f : 0.0095f);
+        SetArrowDirection(arrow, direction, length, narrowHead ? 0.012f : 0.016f, narrowHead ? 0.006f : 0.0095f);
 
         if (color is not null && arrow.Badge is { } marker)
         {

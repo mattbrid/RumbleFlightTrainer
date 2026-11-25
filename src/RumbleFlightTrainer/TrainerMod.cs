@@ -18,6 +18,7 @@ public sealed class TrainerMod : MelonMod
 
     private bool hudRequested;
     private bool showPerStructureImpulse;
+    private bool perStructureImpulseAtContact;
     private bool showStructureVelocity;
     private bool showNormalSpeed;
     private bool showHitWarning;
@@ -42,7 +43,9 @@ public sealed class TrainerMod : MelonMod
         hudRequested = preferences.CreateEntry("HudEnabledOnStartup", true,
             description: "Enable the flight HUD in Gym and Park on startup. F8 toggles it for the current session.").Value;
         showPerStructureImpulse = preferences.CreateEntry("HudShowPerStructureImpulse", false,
-            description: "Also show the gravity arrow and strongest individual contact impulse arrows.", oldIdentifier: "HudShowImpulse").Value;
+            description: "Show airborne gravity and the strongest individual contact impulse arrows.", oldIdentifier: "HudShowImpulse").Value;
+        perStructureImpulseAtContact = preferences.CreateEntry("HudPerStructureImpulseAtContact", true,
+            description: "Start individual impulse arrows at their contact points. False starts them at the HUD origin.").Value;
         showStructureVelocity = preferences.CreateEntry("HudShowStructureVelocity", false,
             description: "Show relative velocity arrows for nearby structures.").Value;
         showNormalSpeed = preferences.CreateEntry("HudShowNormalSpeed", true,
@@ -156,10 +159,12 @@ public sealed class TrainerMod : MelonMod
                 return;
             }
 
-            view ??= new FlightHudView(showPerStructureImpulse, showStructureVelocity, showNormalSpeed,
-                showVelocityOnBreak, showNormalSpeedOnBreak);
-            var playerReference = frame.Structures.Length > 0 || frame.Breaks.Any(broken => broken.PlayerContact?.Placement is not null)
-                ? telemetry?.ReadHudPlayerReference() : null;
+            view ??= new FlightHudView(showPerStructureImpulse, perStructureImpulseAtContact, showStructureVelocity,
+                showNormalSpeed, showVelocityOnBreak, showNormalSpeedOnBreak);
+            bool needsPlayerReference = frame.Structures.Length > 0 ||
+                frame.Breaks.Any(broken => broken.PlayerContact?.Placement is not null) ||
+                (showPerStructureImpulse && frame.GravityImpulseWorld != System.Numerics.Vector3.Zero);
+            var playerReference = needsPlayerReference ? telemetry?.ReadHudPlayerReference() : null;
             var ironBoots = map.name == Gym ? telemetry?.ReadIronBoots(active.Origin, now, ironBootsLastContactHoldSeconds) : null;
             view.Draw(headset, frame, playerReference, hudOffset, ironBootsHudOffset, ironBoots, nearby?.Velocities, nearby?.HitWarnings);
         }

@@ -35,7 +35,8 @@ internal sealed partial class FlightHudView
         public bool HitWarning { get; set; }
     }
 
-    private bool DrawContactGeometry(FlightHudFrame frame, Quaternion worldToView, Quaternion bodyToView,
+    private (bool MissingLocation, Vector3? CapsuleCenter) DrawContactGeometry(FlightHudFrame frame,
+        Quaternion worldToView, Quaternion bodyToView,
         HudNearbyCollider? playerReference, IReadOnlySet<StructureKey>? hitWarnings)
     {
         int boxCount = 0;
@@ -44,8 +45,19 @@ internal sealed partial class FlightHudView
         int liveMarkerCount = 0;
         int lostMarkerCount = 0;
         bool missingLocation = false;
+        Vector3? capsuleCenter = null;
         drawnPlayerColliders.Clear();
         retainedPlayerColliders.Clear();
+
+        void DrawPlayer(int id, HudPlayerCollider player, HudContactPlacement placement, Quaternion rotation,
+            bool retained = false)
+        {
+            if (!drawnPlayerColliders.Add(id))
+                return;
+            var center = DrawPlayerCollider(playerColliderCount++, player, placement, rotation);
+            if (!retained && id == playerReference?.ColliderId)
+                capsuleCenter = center;
+        }
 
         foreach (var structure in frame.Structures)
         {
@@ -58,8 +70,8 @@ internal sealed partial class FlightHudView
             {
                 var geometry = pair.Geometry;
                 var placement = geometry.Tick == frame.GeometryTick ? geometry.Placement : null;
-                if (placement?.Player is { } player && drawnPlayerColliders.Add(geometry.Pair.PlayerColliderId))
-                    DrawPlayerCollider(playerColliderCount++, player, placement, worldToView);
+                if (placement?.Player is { } player)
+                    DrawPlayer(geometry.Pair.PlayerColliderId, player, placement, worldToView);
                 if (placement?.Box is { } box && drawnStructureColliders.Add(geometry.Pair.OtherColliderId))
                     DrawBox(boxCount++, box, placement, wireframeColor, worldToView, hitWarning);
                 if (placement?.Mesh is { } mesh && drawnStructureColliders.Add(geometry.Pair.OtherColliderId))
@@ -113,8 +125,8 @@ internal sealed partial class FlightHudView
             if (impactPlacement.Player is { } player)
             {
                 point = player.PointOnSurface(point) ?? player.PointOnSurface(impact.CenterWorld) ?? point;
-                if (impact.PlayerColliderId is { } id && drawnPlayerColliders.Add(id))
-                    DrawPlayerCollider(playerColliderCount++, player, impactPlacement, rotation);
+                if (impact.PlayerColliderId is { } id)
+                    DrawPlayer(id, player, impactPlacement, rotation, retained: true);
             }
             DrawMarker(marker, patch, rotation * ToUnity(impactPlacement.Offset(point)), bodyToView,
                 StructureMaterial(broken.Key), measured: !impact.EstimatedContact);
@@ -123,12 +135,15 @@ internal sealed partial class FlightHudView
 
         foreach (var (colliderId, geometry) in retainedPlayerColliders)
         {
-            if (drawnPlayerColliders.Add(colliderId) && geometry.Placement is { Player: { } player } placement)
-                DrawPlayerCollider(playerColliderCount++, player, placement, LossRotation(placement, bodyToView));
+            if (geometry.Placement is { Player: { } player } placement)
+                DrawPlayer(colliderId, player, placement, LossRotation(placement, bodyToView), retained: true);
         }
-        if (playerReference is { Placement: { Player: { } capsule } reference } &&
-            drawnPlayerColliders.Add(playerReference.ColliderId))
-            DrawPlayerCollider(playerColliderCount++, capsule, reference, worldToView);
+        if (playerReference is { Placement: { Player: { } capsule } reference })
+        {
+            DrawPlayer(playerReference.ColliderId, capsule, reference, worldToView);
+            // A retained outline can take the collider's draw slot. Gravity still follows the live capsule.
+            capsuleCenter ??= worldToView * ToUnity(reference.Offset(capsule.Center));
+        }
 
         for (int i = boxCount; i < boxes.Count; i++)
             boxes[i].Root.gameObject.SetActive(false);
@@ -138,7 +153,7 @@ internal sealed partial class FlightHudView
             playerColliders[i].Root.gameObject.SetActive(false);
         HideUnused(liveMarkers, liveMarkerCount);
         HideUnused(lossMarkers, lostMarkerCount);
-        return missingLocation;
+        return (missingLocation, capsuleCenter);
     }
 
     // Carry the sampled offsets with the player's current yaw after a loss.
@@ -221,7 +236,7 @@ internal sealed partial class FlightHudView
         widget.Root.gameObject.SetActive(true);
     }
 
-    private void DrawPlayerCollider(int index, HudPlayerCollider player, HudContactPlacement placement, Quaternion rotation)
+    private Vector3 DrawPlayerCollider(int index, HudPlayerCollider player, HudContactPlacement placement, Quaternion rotation)
     {
         if (index == playerColliders.Count)
         {
@@ -233,7 +248,8 @@ internal sealed partial class FlightHudView
         }
 
         var widget = playerColliders[index];
-        widget.Root.localPosition = rotation * ToUnity(placement.Offset(player.Center));
+        var center = rotation * ToUnity(placement.Offset(player.Center));
+        widget.Root.localPosition = center;
         widget.Root.localRotation = rotation * Quaternion.FromToRotation(Vector3.up, ToUnity(player.Axis));
         if (widget.HalfSpan != player.HalfSpan || widget.Radius != player.Radius)
         {
@@ -257,6 +273,7 @@ internal sealed partial class FlightHudView
             widget.Side.SetPosition(last, new Vector3(0, span, radius));
         }
         widget.Root.gameObject.SetActive(true);
+        return center;
     }
 
     private void DrawMesh(int index, HudMeshPreview mesh, HudContactPlacement placement, Material color, Quaternion rotation,

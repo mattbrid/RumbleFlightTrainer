@@ -28,6 +28,30 @@ internal sealed record HudStructureFrame(
     bool HasImpulse, bool PartialImpulse, HudLossMark[] Losses, IReadOnlyList<HudNearbyCollider>? NearbyGeometry = null)
 {
     public bool Touching => ActivePairs.Length != 0;
+
+    public Vector3? ImpulseContactOffset(long? geometryTick)
+    {
+        Vector3? offset = null;
+        float strongest = -1;
+        foreach (var pair in ActivePairs)
+        {
+            if (!pair.HasImpulse || pair.Geometry.Tick != geometryTick || pair.Geometry.Placement is not { } placement)
+                continue;
+            float strength = pair.PushWorld.LengthSquared();
+            if (strength <= strongest)
+                continue;
+
+            foreach (var patch in pair.Patches)
+            {
+                if (placement.MarkerPoint(patch) is not { } point)
+                    continue;
+                offset = placement.Offset(point);
+                strongest = strength;
+                break;
+            }
+        }
+        return offset;
+    }
 }
 
 internal sealed record FlightHudFrame(
@@ -106,7 +130,7 @@ internal sealed class FlightHudState
     private readonly Dictionary<int, int> endedGenerations = new();
     private readonly HashSet<(ContactKey Pair, StructureKey Structure, long Tick)> measuredTicks = new();
     private readonly List<HudBreak> breaks = new();
-    private readonly Queue<(long Tick, Vector3 World, bool Grounded)> gravityImpulses = new(ImpulseWindowTicks);
+    private readonly Queue<(long Tick, Vector3 World)> gravityImpulses = new(ImpulseWindowTicks);
     private PhysicsSample? step;
     private Quaternion bodyYaw = Quaternion.Identity;
     private int? segment;
@@ -164,8 +188,8 @@ internal sealed class FlightHudState
     public FlightHudFrame Read(double now, IReadOnlyDictionary<StructureKey, List<HudNearbyCollider>>? nearby = null)
     {
         var result = new List<HudStructureFrame>(structures.Count);
-        Vector3 total = Vector3.Zero;
-        float supportCorrection = 0;
+        Vector3 rawContact = Vector3.Zero;
+        Vector3 adjustedContact = Vector3.Zero;
         int measuredCount = 0;
         bool partial = false;
         long? geometryTick = null;
@@ -191,12 +215,15 @@ internal sealed class FlightHudState
             {
                 ExpireImpulses(pair, step?.Tick);
                 Vector3 pairSum = Vector3.Zero;
+                float supportCorrection = 0;
                 foreach (var impulse in pair.Impulses)
                 {
                     pairSum += impulse.World;
                     supportCorrection += impulse.SupportCorrection;
                 }
 
+                rawContact += pairSum;
+                pairSum.Y -= supportCorrection;
                 bool hasImpulse = pair.Impulses.Count > 0;
                 pairs[index++] = new HudPairFrame(pair.Geometry, pairSum / ImpulseWindowTicks, hasImpulse);
                 push += pairSum;
@@ -206,7 +233,7 @@ internal sealed class FlightHudState
                     geometryTick = tick;
             }
 
-            total += push;
+            adjustedContact += push;
             if (measured)
                 measuredCount++;
             partial |= missing;
@@ -222,22 +249,17 @@ internal sealed class FlightHudState
 
         breaks.RemoveAll(broken => now >= broken.TimeSeconds + contactHoldSeconds);
 
-        Vector3 gravity = Vector3.Zero;
         Vector3 airborneGravity = Vector3.Zero;
-        foreach (var impulse in gravityImpulses)
+        // Terrain support balances gravity while standing. Terrain is outside the structure sum.
+        if (step?.Physics.Grounded == false)
         {
-            gravity += impulse.World;
-            if (!impulse.Grounded)
+            foreach (var impulse in gravityImpulses)
                 airborneGravity += impulse.World;
         }
 
-        Vector3 combined = total - Vector3.UnitY * supportCorrection;
-        // Terrain support balances gravity while standing. Terrain is outside the structure sum.
-        if (step?.Physics.Grounded == false)
-            combined += airborneGravity;
-        return new FlightHudFrame(bodyYaw, total / ImpulseWindowTicks, result.ToArray(),
+        return new FlightHudFrame(bodyYaw, rawContact / ImpulseWindowTicks, result.ToArray(),
             touchingCount, measuredCount, partial, observerAvailable, geometryTick, breaks.ToArray(),
-            combined / ImpulseWindowTicks, gravity / ImpulseWindowTicks);
+            (adjustedContact + airborneGravity) / ImpulseWindowTicks, airborneGravity / ImpulseWindowTicks);
     }
 
     private void ObserveGravity(PhysicsSample sample)
@@ -245,11 +267,11 @@ internal sealed class FlightHudState
         while (gravityImpulses.TryPeek(out var impulse) && impulse.Tick <= sample.Tick - ImpulseWindowTicks)
             gravityImpulses.Dequeue();
 
-        if (sample.Physics.GravityImpulseWorld is { } value)
+        if (sample.Physics is { Grounded: false, GravityImpulseWorld: { } value })
         {
             var world = new Vector3(value.X, value.Y, value.Z);
             if (float.IsFinite(world.LengthSquared()))
-                gravityImpulses.Enqueue((sample.Tick, world, sample.Physics.Grounded));
+                gravityImpulses.Enqueue((sample.Tick, world));
         }
     }
 
