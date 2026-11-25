@@ -29,7 +29,7 @@ internal sealed class FlightRuntime
     private ConfigurableJoint? supportJoint;
 
     private FlightRuntime(Scene scene, PlayerController controller, PlayerMovement movement, Rigidbody body,
-        MelonLogger.Instance logger, float ironBootsVerticalVelocityThreshold)
+        MelonLogger.Instance logger, float ironBootsVerticalVelocityThreshold, bool hitWarningEnabled)
     {
         this.scene = scene;
         sceneExitReason = scene.name == Gym ? "left_active_gym" : "left_active_map";
@@ -37,7 +37,7 @@ internal sealed class FlightRuntime
         this.logger = logger;
         Controller = controller;
         Movement = movement;
-        hooks = new FlightGameHooks(logger);
+        hooks = new FlightGameHooks(logger, hitWarningEnabled);
         try
         {
             if (!observerRegistered)
@@ -69,10 +69,12 @@ internal sealed class FlightRuntime
 
     public static bool IsTrainerMap(string name) => name is Gym or "Park";
 
-    public static FlightRuntime? TryOpenTrainer(Scene scene, MelonLogger.Instance logger, float ironBootsVerticalVelocityThreshold) =>
-        IsTrainerMap(scene.name) ? TryOpen(scene, logger, ironBootsVerticalVelocityThreshold) : null;
+    public static FlightRuntime? TryOpenTrainer(Scene scene, MelonLogger.Instance logger, float ironBootsVerticalVelocityThreshold,
+        bool hitWarningEnabled) =>
+        IsTrainerMap(scene.name) ? TryOpen(scene, logger, ironBootsVerticalVelocityThreshold, hitWarningEnabled) : null;
 
-    private static FlightRuntime? TryOpen(Scene scene, MelonLogger.Instance logger, float ironBootsVerticalVelocityThreshold)
+    private static FlightRuntime? TryOpen(Scene scene, MelonLogger.Instance logger, float ironBootsVerticalVelocityThreshold,
+        bool hitWarningEnabled)
     {
         if (current is { } existing)
         {
@@ -85,7 +87,8 @@ internal sealed class FlightRuntime
         var movement = controller?.PlayerMovement;
         var body = controller?.PlayerPhysics?.PhysicsRigidbody;
         return controller == null || movement == null || body == null ? null :
-            current = new FlightRuntime(scene, controller, movement, body, logger, ironBootsVerticalVelocityThreshold);
+            current = new FlightRuntime(scene, controller, movement, body, logger, ironBootsVerticalVelocityThreshold,
+                hitWarningEnabled);
     }
 
     public void AttachTrainer(Action<TraceRecord> observe, Action<string> stop)

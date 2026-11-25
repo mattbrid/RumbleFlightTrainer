@@ -22,7 +22,8 @@ internal sealed partial class StructureTelemetry
     private sealed record HudMeshShape(ColliderShape Base, Vec3 Scale, ColliderShape Outline);
 
     public (IReadOnlyDictionary<StructureKey, List<HudNearbyCollider>> Geometry,
-        IReadOnlyDictionary<StructureKey, HudStructureVelocity> Velocities) ReadNearbyHudStructures(bool showVelocity, bool showNormal)
+        IReadOnlyDictionary<StructureKey, HudStructureVelocity> Velocities, IReadOnlySet<StructureKey> HitWarnings)
+        ReadNearbyHudStructures(bool showVelocity, bool showNormal, bool showHitWarning, float hitWarningPullAcceleration)
     {
         hudNearby.Clear();
         hudVelocities.Clear();
@@ -31,6 +32,9 @@ internal sealed partial class StructureTelemetry
         var playerVelocity = sampleVelocity ? body.linearVelocity : Vector3.zero;
         var capsule = showNormal ? controller.PlayerPhysics.pillBodyCollider : null;
         var origin = new HudBodyFrame(FlightContactPatches.Vector(ToVec3(center)), System.Numerics.Quaternion.Identity);
+        HudHitWarningContext? hitWarning = null;
+        bool warningContextRead = false;
+        ResetHudHitWarnings(showHitWarning);
 
         int count = hudOverlapFailed ? 0 : QueryHudColliders(center);
         for (int i = 0; i < count; i++)
@@ -43,6 +47,9 @@ internal sealed partial class StructureTelemetry
                 returned.Contains(structure.GetInstanceID()) || IsCaged(structure))
                 continue;
 
+            var key = KeyFor(structure);
+            CheckHitWarning(key, structure, collider);
+
             // The baked wireframe belongs to the structure's primary collision mesh.
             var primary = structure.Collider;
             if (primary != null && collider != primary && primary.TryCast<MeshCollider>() is { } mesh)
@@ -52,7 +59,6 @@ internal sealed partial class StructureTelemetry
                     continue;
             }
 
-            var key = KeyFor(structure);
             AddHudOutline(key, collider, origin);
             if (sampleVelocity)
                 AddHudVelocity(key, structure, center, playerVelocity, collider, capsule);
@@ -69,6 +75,7 @@ internal sealed partial class StructureTelemetry
                     (collider.ClosestPoint(center) - center).sqrMagnitude <= HudRangeMetres * HudRangeMetres)
                 {
                     AddHudOutline(entry.Key, collider, origin);
+                    CheckHitWarning(entry.Key, entry.Structure, collider);
                     if (sampleVelocity)
                         AddHudVelocity(entry.Key, entry.Structure, center, playerVelocity, collider, capsule);
                 }
@@ -93,7 +100,21 @@ internal sealed partial class StructureTelemetry
             if (!hudNearby.ContainsKey(identity.Key))
                 hudMeshes.Remove(identity);
 
-        return (hudNearby, hudVelocities);
+        return (hudNearby, hudVelocities, hudHitWarnings);
+
+        void CheckHitWarning(StructureKey key, Structure structure, Collider collider)
+        {
+            if (!showHitWarning || hudTouchingKeys.Contains(key))
+                return;
+
+            if (!warningContextRead)
+            {
+                warningContextRead = true;
+                hitWarning = ReadHudHitWarningContext(center, hitWarningPullAcceleration);
+            }
+            if (hitWarning is { } context)
+                AddHudHitWarning(key, structure, collider, context);
+        }
     }
 
     private void AddHudVelocity(StructureKey key, Structure structure, Vector3 playerCenter, Vector3 playerVelocity,

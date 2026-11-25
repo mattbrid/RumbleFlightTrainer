@@ -59,6 +59,7 @@ internal sealed partial class StructureTelemetry : IDisposable
         public long Until { get; set; }
         public bool CombatOnly { get; set; }
         public bool LocalModifierObserved { get; set; }
+        public HudModifierForce? ModifierForce { get; set; }
         public (int Segment, int Timestamp, PlayerHitScore Score)? HitScore { get; set; }
         public bool Destroyed { get; set; }
         public long? DestructionTick { get; set; }
@@ -396,6 +397,8 @@ internal sealed partial class StructureTelemetry : IDisposable
         ironBootsGate.Reset();
         ironBootsPreSolve = null;
         CloseContacts(null, "coordinate_segment_changed");
+        foreach (var entry in tracked.Values)
+            entry.ModifierForce = null;
         nearby.Clear();
         sampledKeys.Clear();
         impulsesThisTick.Clear();

@@ -27,6 +27,7 @@ internal sealed partial class FlightHudView : IDisposable
     private readonly List<Material> materials = new();
     private readonly Transform anchor;
     private readonly Material lineOutline;
+    private readonly Material hitWarningOutline;
     private readonly Material hitbox;
     private readonly Material[] structureMaterials;
     private readonly Material[] dimStructureMaterials;
@@ -70,6 +71,7 @@ internal sealed partial class FlightHudView : IDisposable
                 throw new InvalidOperationException("The HUD line overlay shader was not available.");
 
             lineOutline = ColorMaterial(shader, Color.black);
+            hitWarningOutline = ColorMaterial(shader, new Color(1f, 0.16f, 0.13f));
             hitbox = ColorMaterial(shader, new Color(0.71f, 0.84f, 0.84f));
             structureMaterials = StructureColors.Select(color => ColorMaterial(shader, color)).ToArray();
             dimStructureMaterials = StructureColors.Select(color =>
@@ -106,7 +108,7 @@ internal sealed partial class FlightHudView : IDisposable
 
     public void Draw(Transform headset, FlightHudFrame frame, HudNearbyCollider? playerReference,
         System.Numerics.Vector3 offset, System.Numerics.Vector3 ironBootsOffset, IronBootsDisplay? ironBoots,
-        IReadOnlyDictionary<StructureKey, HudStructureVelocity>? velocities)
+        IReadOnlyDictionary<StructureKey, HudStructureVelocity>? velocities, IReadOnlySet<StructureKey>? hitWarnings)
     {
         Vector3 forward = headset.forward;
         var horizontal = new Vector3(forward.x, 0, forward.z);
@@ -132,7 +134,7 @@ internal sealed partial class FlightHudView : IDisposable
         DrawNormalSpeedArrows(frame, velocities, worldToView, bodyToView);
         DrawImpulses(frame, worldToView);
 
-        bool missingLocation = DrawContactGeometry(frame, worldToView, bodyToView, playerReference);
+        bool missingLocation = DrawContactGeometry(frame, worldToView, bodyToView, playerReference, hitWarnings);
         DrawBreakOutlines(frame.Breaks, bodyToView);
         var outcome = frame.Outcome;
 

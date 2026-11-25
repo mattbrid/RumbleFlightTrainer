@@ -10,6 +10,9 @@ using BelowRoutine = Il2CppRUMBLE.MoveSystem.CombatManager.__c__DisplayClass93_0
 using JumpRoutine = Il2CppRUMBLE.MoveSystem.CombatManager.__c__DisplayClass96_0.__ProcessJumpOnStructureEvent_g__MasterClient_0_d;
 using RemoteJumpRoutine = Il2CppRUMBLE.MoveSystem.CombatManager.__c__DisplayClass96_0.__ProcessJumpOnStructureEvent_g__RemoteClient_1_d;
 
+using HoldRoutine = Il2CppRUMBLE.MoveSystem.HoldModifier._Execute_d__18;
+using FlickRoutine = Il2CppRUMBLE.MoveSystem.FlickModifier._Execute_d__19;
+
 namespace RumbleFlightTrainer;
 
 internal sealed class FlightGameHooks : IDisposable
@@ -21,7 +24,7 @@ internal sealed class FlightGameHooks : IDisposable
     public bool StructureCollisionProbeInstalled { get; }
     public bool EnvironmentCollisionProbeInstalled { get; }
 
-    public FlightGameHooks(MelonLogger.Instance logger)
+    public FlightGameHooks(MelonLogger.Instance logger, bool hitWarningEnabled)
     {
         this.logger = logger;
         Patch(typeof(Structure), nameof(Structure.OnFetchFromPool), nameof(FetchPostfix), postfix: true);
@@ -29,6 +32,11 @@ internal sealed class FlightGameHooks : IDisposable
         Patch(typeof(Structure), nameof(Structure.Kill), nameof(KillPrefix));
         Patch(typeof(HoldModifier), nameof(HoldModifier.Execute), nameof(HoldPrefix));
         Patch(typeof(FlickModifier), nameof(FlickModifier.Execute), nameof(FlickPrefix));
+        if (hitWarningEnabled)
+        {
+            Patch(typeof(HoldRoutine), nameof(HoldRoutine.MoveNext), nameof(HoldStepPrefix), after: nameof(ModifierStepPostfix));
+            Patch(typeof(FlickRoutine), nameof(FlickRoutine.MoveNext), nameof(FlickStepPrefix), after: nameof(ModifierStepPostfix));
+        }
         Patch(typeof(CombatManager), nameof(CombatManager.RegisterPlayerHitEvent), nameof(PlayerHitPrefix),
             finalizer: nameof(PlayerHitFinalizer));
         Patch(typeof(CombatManager), nameof(CombatManager.GetPjotrVelocityFactor), nameof(PlayerHitScorePostfix), postfix: true);
@@ -63,7 +71,7 @@ internal sealed class FlightGameHooks : IDisposable
     }
 
     private bool Patch(Type gameType, string methodName, string hook, bool postfix = false, Type[]? parameterTypes = null,
-        string? finalizer = null)
+        string? finalizer = null, string? after = null)
     {
         try
         {
@@ -75,7 +83,8 @@ internal sealed class FlightGameHooks : IDisposable
             if (postfix)
                 harmony.Patch(method, postfix: patch);
             else
-                harmony.Patch(method, prefix: patch, finalizer: finalizer is null ? null : new HarmonyMethod(typeof(FlightGameHooks), finalizer));
+                harmony.Patch(method, prefix: patch, postfix: after is null ? null : new HarmonyMethod(typeof(FlightGameHooks), after),
+                    finalizer: finalizer is null ? null : new HarmonyMethod(typeof(FlightGameHooks), finalizer));
             methods.Add(method);
             return true;
         }
@@ -207,5 +216,35 @@ internal sealed class FlightGameHooks : IDisposable
     {
         if (Active is { } capture)
             capture.Guard("flick_execute", () => capture.OnModifier(__0, __1));
+    }
+
+    private static void HoldStepPrefix(HoldRoutine __instance, out StructureTelemetry.HudModifierStep? __state)
+    {
+        __state = null;
+        if (Active is not { ObserveHudModifierSteps: true } capture)
+            return;
+        StructureTelemetry.HudModifierStep? step = null;
+        capture.Guard("hud_hold_force_begin", () => step = capture.BeginHudModifierStep(
+            __instance.Pointer, "hold", __instance.processor, __instance.config, __instance.__8__1?.structure,
+            __instance.__8__1?.rb));
+        __state = step;
+    }
+
+    private static void FlickStepPrefix(FlickRoutine __instance, out StructureTelemetry.HudModifierStep? __state)
+    {
+        __state = null;
+        if (Active is not { ObserveHudModifierSteps: true } capture)
+            return;
+        StructureTelemetry.HudModifierStep? step = null;
+        capture.Guard("hud_flick_force_begin", () => step = capture.BeginHudModifierStep(
+            __instance.Pointer, "flick", __instance.processor, __instance.config, __instance.__8__1?.structure,
+            __instance.__8__1?.rb));
+        __state = step;
+    }
+
+    private static void ModifierStepPostfix(bool __result, StructureTelemetry.HudModifierStep? __state)
+    {
+        if (__state is { } step && ReferenceEquals(Active, step.Owner))
+            step.Owner.Guard("hud_modifier_force_end", () => step.Owner.EndHudModifierStep(step, __result));
     }
 }

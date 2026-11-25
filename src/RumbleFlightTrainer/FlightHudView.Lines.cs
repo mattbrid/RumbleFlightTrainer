@@ -72,6 +72,13 @@ internal sealed partial class FlightHudView
             outline.SetPosition(index, position);
         }
 
+        public void SetOutline(Material material, float thickness)
+        {
+            outline.sharedMaterial = material;
+            // The solid line's width curve already contains its absolute width.
+            outline.startWidth = outline.endWidth = width + 2 * thickness;
+        }
+
         public void SetWidthCurve(AnimationCurve curve)
         {
             // A shared curve brings both widths to zero at the dash gaps.

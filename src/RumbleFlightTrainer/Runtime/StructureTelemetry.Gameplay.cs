@@ -126,11 +126,16 @@ internal sealed partial class StructureTelemetry
         if (!IsLocalProcessor(processor) && !IsLocalProcessor(configuration?.Processor))
             return;
 
-        var component = configuration?.TargetProcessable?.TryCast<ProcessableComponent>();
-        var structure = component == null ? null : component.GetComponentInParent<Structure>();
+        var structure = ModifierStructure(configuration);
         Tracked? entry = structure == null ? null : Promote(structure);
         if (entry is not null)
             entry.LocalModifierObserved = true;
+    }
+
+    private static Structure? ModifierStructure(StackConfiguration? configuration)
+    {
+        var component = configuration?.TargetProcessable?.TryCast<ProcessableComponent>();
+        return component == null ? null : component.GetComponentInParent<Structure>();
     }
 
     private bool IsLocalProcessor(IProcessor? processor) =>

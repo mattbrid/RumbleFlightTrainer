@@ -5,6 +5,7 @@ namespace RumbleFlightTrainer;
 internal sealed partial class FlightHudView
 {
     private const int CapsuleCapSteps = 16;
+    private const float HitWarningOutlineThickness = 0.0012f;
 
     private readonly List<BoxWidget> boxes = new();
     private readonly List<MeshWidget> meshes = new();
@@ -17,6 +18,7 @@ internal sealed partial class FlightHudView
     {
         public HudBoxPreview? Shape { get; set; }
         public Material? Color { get; set; }
+        public bool HitWarning { get; set; }
     }
 
     private sealed record PlayerWidget(Transform Root, HudLine Front, HudLine Side)
@@ -30,10 +32,11 @@ internal sealed partial class FlightHudView
         public List<HudLine> Lines { get; } = new();
         public HudMeshPreview? Shape { get; set; }
         public Material? Color { get; set; }
+        public bool HitWarning { get; set; }
     }
 
     private bool DrawContactGeometry(FlightHudFrame frame, Quaternion worldToView, Quaternion bodyToView,
-        HudNearbyCollider? playerReference)
+        HudNearbyCollider? playerReference, IReadOnlySet<StructureKey>? hitWarnings)
     {
         int boxCount = 0;
         int meshCount = 0;
@@ -49,6 +52,7 @@ internal sealed partial class FlightHudView
             int colorIndex = structureColors[structure.Key];
             var color = structureMaterials[colorIndex];
             var wireframeColor = structure.Touching ? color : dimStructureMaterials[colorIndex];
+            bool hitWarning = hitWarnings?.Contains(structure.Key) == true;
             drawnStructureColliders.Clear();
             foreach (var pair in structure.ActivePairs)
             {
@@ -57,9 +61,9 @@ internal sealed partial class FlightHudView
                 if (placement?.Player is { } player && drawnPlayerColliders.Add(geometry.Pair.PlayerColliderId))
                     DrawPlayerCollider(playerColliderCount++, player, placement, worldToView);
                 if (placement?.Box is { } box && drawnStructureColliders.Add(geometry.Pair.OtherColliderId))
-                    DrawBox(boxCount++, box, placement, wireframeColor, worldToView);
+                    DrawBox(boxCount++, box, placement, wireframeColor, worldToView, hitWarning);
                 if (placement?.Mesh is { } mesh && drawnStructureColliders.Add(geometry.Pair.OtherColliderId))
-                    DrawMesh(meshCount++, mesh, placement, wireframeColor, worldToView);
+                    DrawMesh(meshCount++, mesh, placement, wireframeColor, worldToView, hitWarning);
 
                 missingLocation |= DrawContactMarkers(geometry, placement, worldToView,
                     color, lost: false, liveMarkers, ref liveMarkerCount);
@@ -73,9 +77,9 @@ internal sealed partial class FlightHudView
                         continue;
                     var placement = collider.Placement;
                     if (placement.Box is { } box)
-                        DrawBox(boxCount++, box, placement, wireframeColor, worldToView);
+                        DrawBox(boxCount++, box, placement, wireframeColor, worldToView, hitWarning);
                     if (placement.Mesh is { } mesh)
-                        DrawMesh(meshCount++, mesh, placement, wireframeColor, worldToView);
+                        DrawMesh(meshCount++, mesh, placement, wireframeColor, worldToView, hitWarning);
                 }
             }
 
@@ -175,7 +179,8 @@ internal sealed partial class FlightHudView
         return missing;
     }
 
-    private void DrawBox(int index, HudBoxPreview box, HudContactPlacement placement, Material color, Quaternion rotation)
+    private void DrawBox(int index, HudBoxPreview box, HudContactPlacement placement, Material color, Quaternion rotation,
+        bool hitWarning)
     {
         if (index == boxes.Count)
         {
@@ -206,6 +211,12 @@ internal sealed partial class FlightHudView
                 line.SetPosition(0, ToUnity(box.Corners[from] - box.Center) * HudContactPlacement.Scale);
                 line.SetPosition(1, ToUnity(box.Corners[to] - box.Center) * HudContactPlacement.Scale);
             }
+        }
+        if (widget.HitWarning != hitWarning)
+        {
+            widget.HitWarning = hitWarning;
+            foreach (var line in widget.Edges)
+                SetStructureOutline(line, hitWarning);
         }
         widget.Root.gameObject.SetActive(true);
     }
@@ -248,7 +259,8 @@ internal sealed partial class FlightHudView
         widget.Root.gameObject.SetActive(true);
     }
 
-    private void DrawMesh(int index, HudMeshPreview mesh, HudContactPlacement placement, Material color, Quaternion rotation)
+    private void DrawMesh(int index, HudMeshPreview mesh, HudContactPlacement placement, Material color, Quaternion rotation,
+        bool hitWarning)
     {
         if (index == meshes.Count)
             meshes.Add(new MeshWidget(Child(anchor, "Structure mesh").transform));
@@ -269,6 +281,8 @@ internal sealed partial class FlightHudView
                 {
                     var created = Line(widget.Root, "Collider outline", color, width, DrawOrder.Wireframe);
                     created.CapVertices = 0;
+                    if (widget.HitWarning)
+                        SetStructureOutline(created, true);
                     widget.Lines.Add(created);
                 }
 
@@ -292,11 +306,21 @@ internal sealed partial class FlightHudView
             for (int i = lineCount; i < widget.Lines.Count; i++)
                 widget.Lines[i].Enabled = false;
         }
+        if (widget.HitWarning != hitWarning)
+        {
+            widget.HitWarning = hitWarning;
+            foreach (var line in widget.Lines)
+                SetStructureOutline(line, hitWarning);
+        }
         widget.Root.gameObject.SetActive(true);
 
         Vector3 Point(Vec3 local) =>
             ToUnity(mesh.Offsets.Point(FlightContactPatches.Vector(local))) * HudContactPlacement.Scale;
     }
+
+    private void SetStructureOutline(HudLine line, bool hitWarning) =>
+        line.SetOutline(hitWarning ? hitWarningOutline : lineOutline,
+            hitWarning ? HitWarningOutlineThickness : OutlineThickness);
 
     private static (System.Numerics.Vector3 Start, System.Numerics.Vector3 End) PatchSpan(ContactGeometry[] points)
     {
