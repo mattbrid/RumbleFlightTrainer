@@ -8,7 +8,7 @@ internal sealed partial class FlightHudView
     private readonly Dictionary<int, AnimationCurve> breakDashCurves = new();
     private sealed record BreakOutline(Transform Root)
     {
-        public List<LineRenderer> Edges { get; } = new();
+        public List<HudLine> Edges { get; } = new();
         public HudPlayerBreakContact? Contact { get; set; }
         public Material? Color { get; set; }
     }
@@ -58,7 +58,7 @@ internal sealed partial class FlightHudView
             }
 
             for (int i = used; i < breakEdges.Count; i++)
-                breakEdges[i].enabled = false;
+                breakEdges[i].Enabled = false;
 
             void DrawEdge(System.Numerics.Vector3 from, System.Numerics.Vector3 to)
             {
@@ -72,14 +72,14 @@ internal sealed partial class FlightHudView
                 if (used == breakEdges.Count)
                 {
                     var newEdge = Line(outline, "Dashed structure edge", color, width, DrawOrder.Wireframe);
-                    newEdge.numCapVertices = 0;
+                    newEdge.CapVertices = 0;
                     breakEdges.Add(newEdge);
                 }
 
                 var line = breakEdges[used++];
-                line.sharedMaterial = color;
+                line.Material = color;
                 int intervals = 4 * Mathf.Clamp(Mathf.CeilToInt(length / 0.018f), 1, 24);
-                line.positionCount = intervals + 1;
+                line.PositionCount = intervals + 1;
                 // LineRenderer samples width at vertices. Add vertices at every dash and gap boundary.
                 for (int i = 0; i <= intervals; i++)
                     line.SetPosition(i, Vector3.Lerp(start, end, (float)i / intervals));
@@ -90,9 +90,8 @@ internal sealed partial class FlightHudView
                         keys[i] = new Keyframe((float)i / intervals, i % 4 is 1 or 2 ? 1f : 0f);
                     breakDashCurves[intervals] = curve = new AnimationCurve(keys);
                 }
-                line.widthCurve = curve;
-                line.widthMultiplier = width;
-                line.enabled = true;
+                line.SetWidthCurve(curve);
+                line.Enabled = true;
             }
         }
 

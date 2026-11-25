@@ -5,16 +5,16 @@ namespace RumbleFlightTrainer;
 
 internal sealed partial class FlightHudView
 {
-    private static readonly Color AlignedAngle = new(0.20f, 0.53f, 0.33f);
-    private static readonly Color UnalignedAngle = new(0.70f, 0.31f, 0.22f);
+    private static readonly Color AlignedAngle = new(0.62f, 1f, 0.81f);
+    private static readonly Color UnalignedAngle = new(1f, 0.62f, 0.48f);
 
     private IronBootsPanel? ironBootsPanel;
     private IronBootsApproach? shownIronBoots;
     private IronBootsDiagram? shownDiagram;
 
-    private sealed record IronBootsPanel(GameObject Root, LineRenderer Box, LineRenderer Player, LineRenderer Foot,
-        LineRenderer Velocity, LineRenderer Arrowhead, LineRenderer OriginRay, LineRenderer Origin,
-        LineRenderer Feet, LineRenderer Contact, LineRenderer Arc, TextMeshPro Angle, TextMeshPro LastContact,
+    private sealed record IronBootsPanel(GameObject Root, HudLine Box, HudLine Player, HudLine Foot,
+        HudLine Velocity, HudLine Arrowhead, HudLine OriginRay, HudLine Origin,
+        HudLine Feet, HudLine Contact, HudLine Arc, TextMeshPro Angle, TextMeshPro LastContact,
         Material Aligned, Material Unaligned);
 
     private void DrawIronBoots(Transform headset, Vector3 defaultHudPosition, System.Numerics.Vector3 offset, IronBootsDisplay? frame)
@@ -48,26 +48,26 @@ internal sealed partial class FlightHudView
         {
             SetDiagramPath(panel.Box, diagram.Section);
             SetDiagramPath(panel.Player, diagram.Player);
-            panel.Player.enabled = diagram.Player.Length > 0;
+            panel.Player.Enabled = diagram.Player.Length > 0;
             SetDiagramPath(panel.Foot, diagram.Foot);
-            panel.Foot.enabled = diagram.Foot.Length > 0;
+            panel.Foot.Enabled = diagram.Foot.Length > 0;
             panel.Velocity.SetPosition(0, DiagramPoint(diagram.Feet));
             panel.Velocity.SetPosition(1, DiagramPoint(diagram.VelocityTip));
-            panel.Velocity.enabled = diagram.Arrowhead.Length > 0;
+            panel.Velocity.Enabled = diagram.Arrowhead.Length > 0;
             SetDiagramPath(panel.Arrowhead, diagram.Arrowhead);
-            panel.Arrowhead.enabled = panel.Velocity.enabled;
+            panel.Arrowhead.Enabled = panel.Velocity.Enabled;
             panel.OriginRay.SetPosition(0, DiagramPoint(diagram.Feet));
             panel.OriginRay.SetPosition(1, DiagramPoint(diagram.Origin));
             SetDiagramDot(panel.Origin, diagram.Origin);
             SetDiagramDot(panel.Feet, diagram.Feet);
-            panel.Contact.transform.localPosition = DiagramPoint(diagram.Contact);
+            panel.Contact.Transform.localPosition = DiagramPoint(diagram.Contact);
             panel.LastContact.text = approach.EstimatedContact ? "Last contact (estimated)" : "Last contact";
             SetDiagramPath(panel.Arc, diagram.Arc);
-            panel.Arc.enabled = diagram.Arc.Length > 0 && approach.Alignment.HasValue;
+            panel.Arc.Enabled = diagram.Arc.Length > 0 && approach.Alignment.HasValue;
 
             bool aligned = approach.Alignment is { MeetsDownCutoff: true, MeetsOriginCutoff: true };
-            panel.Arc.sharedMaterial = aligned ? panel.Aligned : panel.Unaligned;
-            panel.Angle.color = aligned ? AlignedAngle : UnalignedAngle;
+            panel.Arc.Material = aligned ? panel.Aligned : panel.Unaligned;
+            panel.Angle.color = Color.Lerp(aligned ? AlignedAngle : UnalignedAngle, Color.white, 0.30f);
             panel.Angle.text = approach.Alignment is { } alignment
                 ? FormattableString.Invariant($"{alignment.AngleDegrees:F0}°") : string.Empty;
             panel.Angle.transform.localPosition = DiagramPoint(diagram.AngleLabel) + Vector3.back * 0.004f;
@@ -75,9 +75,9 @@ internal sealed partial class FlightHudView
             int fallback = (int)(unchecked((uint)approach.Structure.PoolGeneration) % StructureColors.Length);
             var color = structureColors.TryGetValue(approach.Structure, out int index)
                 ? structureMaterials[index] : structureMaterials[fallback];
-            panel.Box.sharedMaterial = color;
-            panel.OriginRay.sharedMaterial = color;
-            panel.Origin.sharedMaterial = color;
+            panel.Box.Material = color;
+            panel.OriginRay.Material = color;
+            panel.Origin.Material = color;
         }
 
         if (panel.LastContact.gameObject.activeSelf != retained)
@@ -91,11 +91,11 @@ internal sealed partial class FlightHudView
         var panel = Child(anchor, "Iron Boots diagram");
         var transform = panel.transform;
         var box = Line(transform, "Box cross-section", hitbox, 0.0016f, DrawOrder.Wireframe);
-        box.loop = true;
+        box.Loop = true;
         var player = Line(transform, "Player profile", hitbox, 0.0018f, DrawOrder.Wireframe);
-        player.loop = true;
+        player.Loop = true;
         var foot = Line(transform, "Foot collider section", hitbox, 0.0014f, DrawOrder.Wireframe);
-        foot.loop = true;
+        foot.Loop = true;
         var velocity = Line(transform, "VR velocity", hitbox, 0.0022f, DrawOrder.StructurePush, Vector3.zero, Vector3.one);
         var arrowhead = Line(transform, "Velocity arrowhead", hitbox, 0.0022f, DrawOrder.StructurePush);
         var ray = Line(transform, "Ray to structure origin", hitbox, 0.0022f, DrawOrder.StructurePush, Vector3.zero, Vector3.one);
@@ -106,40 +106,23 @@ internal sealed partial class FlightHudView
         var unaligned = ColorMaterial(hitbox.shader, UnalignedAngle);
         var arc = Line(transform, "Approach angle arc", aligned, 0.0018f, DrawOrder.LiveFace);
 
-        var angle = Label("Approach angle", 0.024f, 8f);
-        var last = Label("Last contact", 0.017f, 28f);
+        var angle = CreateHudLabel(transform, "Approach angle", 0.024f, new Vector2(8f, 4f), TextAlignmentOptions.Center);
+        var last = CreateHudLabel(transform, "Last contact", 0.017f, new Vector2(28f, 4f), TextAlignmentOptions.Center);
         last.transform.localPosition = new Vector3(0, 0.095f, -0.004f);
-        last.text = "Last contact";
-        last.color = StatusTextColor;
         last.gameObject.SetActive(false);
         return new IronBootsPanel(panel, box, player, foot, velocity, arrowhead, ray, origin, feet, contact, arc,
             angle, last, aligned, unaligned);
-
-        TextMeshPro Label(string name, float scale, float width)
-        {
-            var text = Child(transform, name).AddComponent<TextMeshPro>();
-            text.transform.localScale = Vector3.one * scale;
-            text.rectTransform.sizeDelta = new Vector2(width, 4f);
-            text.rectTransform.pivot = new Vector2(0.5f, 0.5f);
-            text.font = status.font;
-            text.fontSharedMaterial = status.fontSharedMaterial;
-            text.fontSize = status.fontSize;
-            text.alignment = TextAlignmentOptions.Center;
-            text.richText = false;
-            SetTextDrawOrder(text);
-            return text;
-        }
     }
 
-    private static void SetDiagramPath(LineRenderer line, System.Numerics.Vector2[] points)
+    private static void SetDiagramPath(HudLine line, System.Numerics.Vector2[] points)
     {
-        if (line.positionCount != points.Length)
-            line.positionCount = points.Length;
+        if (line.PositionCount != points.Length)
+            line.PositionCount = points.Length;
         for (int i = 0; i < points.Length; i++)
             line.SetPosition(i, DiagramPoint(points[i]));
     }
 
-    private static void SetDiagramDot(LineRenderer line, System.Numerics.Vector2 point)
+    private static void SetDiagramDot(HudLine line, System.Numerics.Vector2 point)
     {
         var center = DiagramPoint(point);
         line.SetPosition(0, center + Vector3.left * 0.0004f);

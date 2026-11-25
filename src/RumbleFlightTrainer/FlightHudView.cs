@@ -12,23 +12,22 @@ internal sealed partial class FlightHudView : IDisposable
     private const float VelocityArrowSeconds = 0.15f;
     private const int LiveBranchLimit = 2;
     private const int LossDashes = 6;
-    private const float InactiveWireframeBrightness = 0.5f;
+    private const float InactiveWireframeBrightness = 0.9f;
 
     private static readonly Color[] StructureColors =
     {
-        new(0.72f, 0.40f, 0.12f), new(0.19f, 0.46f, 0.72f), new(0.76f, 0.31f, 0.55f),
-        new(0.45f, 0.57f, 0.18f), new(0.49f, 0.34f, 0.73f), new(0.77f, 0.33f, 0.27f),
-        new(0.14f, 0.57f, 0.53f)
+        new(1f, 0.72f, 0.38f), new(0.48f, 0.77f, 1f), new(1f, 0.58f, 0.81f),
+        new(0.87f, 0.95f, 0.50f), new(0.79f, 0.67f, 1f), new(1f, 0.61f, 0.55f),
+        new(0.47f, 0.95f, 0.92f)
     };
-    private static readonly Color StatusTextColor = new(0.16f, 0.23f, 0.25f);
-    private static readonly Color OutcomeTextColor = new(0.52f, 0.31f, 0.13f);
+    private static readonly Color StatusTextColor = Color.white;
+    private static readonly Color OutcomeTextColor = new(1f, 0.84f, 0.62f);
 
     private readonly GameObject root = new("Flight Trainer HUD");
     private readonly List<Material> materials = new();
     private readonly Transform anchor;
-    private readonly Material edging;
+    private readonly Material lineOutline;
     private readonly Material hitbox;
-    private readonly Material lastHitbox;
     private readonly Material[] structureMaterials;
     private readonly Material[] dimStructureMaterials;
     private readonly Dictionary<StructureKey, int> structureColors = new();
@@ -48,11 +47,11 @@ internal sealed partial class FlightHudView : IDisposable
 
     private enum DrawOrder { Wireframe, StructureVelocity, StructureNormalSpeed, NetPush, StructurePush, LossFace, LossRim, LiveFace, LiveRim, Text }
 
-    private sealed record Arrow(Transform Root, LineRenderer Shaft, LineRenderer Head, LineRenderer? Badge);
+    private sealed record Arrow(Transform Root, HudLine Shaft, HudLine Head, HudLine? Badge);
 
     private sealed record Marker(
-        GameObject Root, LineRenderer Rim, LineRenderer Dot,
-        LineRenderer Face, LineRenderer Span);
+        GameObject Root, HudLine Rim, HudLine Dot,
+        HudLine Face, HudLine Span);
 
     public FlightHudView(bool showPerStructureImpulse, bool showStructureVelocity, bool showNormalSpeed,
         bool showVelocityOnBreak, bool showNormalSpeedOnBreak)
@@ -69,14 +68,13 @@ internal sealed partial class FlightHudView : IDisposable
             if (shader == null)
                 throw new InvalidOperationException("The HUD line overlay shader was not available.");
 
-            edging = ColorMaterial(shader, new Color(0.035f, 0.08f, 0.09f));
-            hitbox = ColorMaterial(shader, new Color(0.35f, 0.49f, 0.50f));
-            lastHitbox = ColorMaterial(shader, new Color(0.22f, 0.30f, 0.32f));
+            lineOutline = ColorMaterial(shader, Color.black);
+            hitbox = ColorMaterial(shader, new Color(0.71f, 0.84f, 0.84f));
             structureMaterials = StructureColors.Select(color => ColorMaterial(shader, color)).ToArray();
             dimStructureMaterials = StructureColors.Select(color =>
                 ColorMaterial(shader, Color.Lerp(Color.black, color, InactiveWireframeBrightness))).ToArray();
 
-            var push = ColorMaterial(shader, new Color(0.20f, 0.59f, 0.43f));
+            var push = ColorMaterial(shader, new Color(0.62f, 1f, 0.81f));
             totalArrow = CreateArrow(anchor, "Net push", push, 0.0045f, DrawOrder.NetPush);
             if (showPerStructureImpulse)
             {
@@ -87,31 +85,9 @@ internal sealed partial class FlightHudView : IDisposable
                         DrawOrder.StructurePush, badge: true);
             }
 
-            var statusObject = Child(anchor, "Contact status");
-            statusObject.transform.localPosition = new Vector3(0, -0.195f, -0.003f);
-            statusObject.transform.localScale = Vector3.one * 0.024f;
-            status = statusObject.AddComponent<TextMeshPro>();
-            if (status.rectTransform is { } rect)
-            {
-                rect.sizeDelta = new Vector2(32f, 8f);
-                rect.pivot = new Vector2(0.5f, 1f);
-            }
-            status.fontSize = 8.8f;
-            status.alignment = TextAlignmentOptions.Top;
-            status.richText = false;
-            status.text = string.Empty;
             root.SetActive(true);
-            // Keep depth settings local to the HUD even though TMP shares the font atlas.
-            var textMaterial = new Material(status.fontSharedMaterial);
-            materials.Add(textMaterial);
-            Shader overlayText = Shader.Find("TextMeshPro/Distance Field Overlay");
-            if (overlayText != null)
-                textMaterial.shader = overlayText;
-            else
-                textMaterial.SetInt("unity_GUIZTestMode", (int)CompareFunction.Always);
-            textMaterial.renderQueue = (int)RenderQueue.Overlay;
-            status.fontSharedMaterial = textMaterial;
-            SetTextDrawOrder(status);
+            status = CreateHudLabel(anchor, "Contact status", 0.024f, new Vector2(32f, 8f), TextAlignmentOptions.Top);
+            status.transform.localPosition = new Vector3(0, -0.195f, -0.003f);
             root.SetActive(false);
         }
         catch
@@ -187,14 +163,6 @@ internal sealed partial class FlightHudView : IDisposable
         }
     }
 
-    private static void SetTextDrawOrder(TextMeshPro text)
-    {
-        var renderer = text.GetComponent<MeshRenderer>();
-        renderer.sortingOrder = (int)DrawOrder.Text;
-        renderer.shadowCastingMode = ShadowCastingMode.Off;
-        renderer.receiveShadows = false;
-    }
-
     private void AssignStructureColors(HudStructureFrame[] structures, HudBreak[] breaks)
     {
         displayedStructures.Clear();
@@ -232,7 +200,7 @@ internal sealed partial class FlightHudView : IDisposable
 
     private Material StructureMaterial(StructureKey key) => structureMaterials[structureColors[key]];
 
-    private static Arrow CreateArrow(Transform parent, string name, Material material, float width, DrawOrder order,
+    private Arrow CreateArrow(Transform parent, string name, Material material, float width, DrawOrder order,
         bool badge = false)
     {
         var arrow = Child(parent, name).transform;
@@ -285,8 +253,8 @@ internal sealed partial class FlightHudView : IDisposable
         }
         var arrow = pool[used++];
         arrow.Root.localPosition = position;
-        arrow.Shaft.sharedMaterial = color;
-        arrow.Head.sharedMaterial = color;
+        arrow.Shaft.Material = color;
+        arrow.Head.Material = color;
         float headLength = Mathf.Min(length * 0.45f, 0.014f);
         SetArrowDirection(arrow, direction, length, headLength, headLength * 0.55f);
         arrow.Root.gameObject.SetActive(true);
@@ -302,10 +270,10 @@ internal sealed partial class FlightHudView : IDisposable
     {
         float magnitude = impulse.magnitude;
         bool visible = float.IsFinite(magnitude) && magnitude >= MinimumArrowImpulse;
-        arrow.Shaft.enabled = visible;
-        arrow.Head.enabled = visible;
+        arrow.Shaft.Enabled = visible;
+        arrow.Head.Enabled = visible;
         if (arrow.Badge is { } badge)
-            badge.enabled = visible;
+            badge.Enabled = visible;
         if (!visible)
             return;
 
@@ -316,10 +284,9 @@ internal sealed partial class FlightHudView : IDisposable
 
         if (color is not null && arrow.Badge is { } marker)
         {
-            arrow.Shaft.sharedMaterial = color;
-            arrow.Head.sharedMaterial = color;
-            marker.sharedMaterial = color;
-            marker.transform.localPosition = direction * length + Vector3.back * 0.003f;
+            arrow.Shaft.Material = color;
+            arrow.Head.Material = color;
+            marker.Transform.localPosition = direction * length + Vector3.back * 0.003f;
         }
     }
 
@@ -348,8 +315,6 @@ internal sealed partial class FlightHudView : IDisposable
         var circle = Arc(radius, segments);
         var faceOrder = lost ? DrawOrder.LossFace : DrawOrder.LiveFace;
         var rimOrder = lost ? DrawOrder.LossRim : DrawOrder.LiveRim;
-        var edge = Line(marker.transform, "Dark edge", edging, 0.005f, faceOrder, circle);
-        edge.transform.localPosition = Vector3.forward * 0.001f;
         var material = structureMaterials[0];
         var rim = Line(marker.transform, "Outline", material, 0.0024f, rimOrder, circle);
         var face = Line(marker.transform, "Contact face", material, 0.0018f, faceOrder, Arc(radius + 0.006f, segments));
@@ -359,12 +324,8 @@ internal sealed partial class FlightHudView : IDisposable
         if (lost)
         {
             var dashes = DashWidth();
-            foreach (var line in new[] { edge, rim, face })
-            {
-                float width = line.startWidth;
-                line.widthCurve = dashes;
-                line.widthMultiplier = width;
-            }
+            rim.SetWidthCurve(dashes);
+            face.SetWidthCurve(dashes);
         }
         pool.Add(new Marker(marker, rim, dot, face, span));
         return pool[index];
@@ -374,13 +335,13 @@ internal sealed partial class FlightHudView : IDisposable
         bool measured)
     {
         marker.Root.transform.localPosition = position;
-        marker.Rim.sharedMaterial = color;
-        marker.Face.sharedMaterial = color;
-        marker.Dot.sharedMaterial = color;
-        marker.Dot.enabled = measured;
-        marker.Face.enabled = patch.BodyNormal.HasValue;
+        marker.Rim.Material = color;
+        marker.Face.Material = color;
+        marker.Dot.Material = color;
+        marker.Dot.Enabled = measured;
+        marker.Face.Enabled = patch.BodyNormal.HasValue;
         if (patch.BodyNormal is { } normal)
-            marker.Face.transform.localRotation = Quaternion.FromToRotation(Vector3.forward, directionToHud * ToUnity(normal));
+            marker.Face.Transform.localRotation = Quaternion.FromToRotation(Vector3.forward, directionToHud * ToUnity(normal));
         marker.Root.SetActive(true);
     }
 
@@ -423,23 +384,6 @@ internal sealed partial class FlightHudView : IDisposable
         material.SetInt("_ZWrite", 0);
         material.renderQueue = (int)RenderQueue.Overlay;
         return material;
-    }
-
-    private static LineRenderer Line(Transform parent, string name, Material material, float width, DrawOrder order, params Vector3[] points)
-    {
-        var line = Child(parent, name).AddComponent<LineRenderer>();
-        line.useWorldSpace = false;
-        line.sharedMaterial = material;
-        line.sortingOrder = (int)order;
-        line.shadowCastingMode = ShadowCastingMode.Off;
-        line.receiveShadows = false;
-        line.startWidth = width;
-        line.endWidth = width;
-        line.numCapVertices = 5;
-        line.positionCount = points.Length;
-        for (int i = 0; i < points.Length; i++)
-            line.SetPosition(i, points[i]);
-        return line;
     }
 
     private static GameObject Child(Transform parent, string name)

@@ -13,22 +13,21 @@ internal sealed partial class FlightHudView
     private readonly Dictionary<int, HudPairGeometry> retainedPlayerColliders = new();
     private readonly HashSet<int> drawnStructureColliders = new();
 
-    private sealed record BoxWidget(Transform Root, LineRenderer[] Edges)
+    private sealed record BoxWidget(Transform Root, HudLine[] Edges)
     {
         public HudBoxPreview? Shape { get; set; }
         public Material? Color { get; set; }
     }
 
-    private sealed record PlayerWidget(Transform Root, LineRenderer Front, LineRenderer Side)
+    private sealed record PlayerWidget(Transform Root, HudLine Front, HudLine Side)
     {
         public float HalfSpan { get; set; }
         public float Radius { get; set; }
-        public Material? Color { get; set; }
     }
 
     private sealed record MeshWidget(Transform Root)
     {
-        public List<LineRenderer> Lines { get; } = new();
+        public List<HudLine> Lines { get; } = new();
         public HudMeshPreview? Shape { get; set; }
         public Material? Color { get; set; }
     }
@@ -56,7 +55,7 @@ internal sealed partial class FlightHudView
                 var geometry = pair.Geometry;
                 var placement = geometry.Tick == frame.GeometryTick ? geometry.Placement : null;
                 if (placement?.Player is { } player && drawnPlayerColliders.Add(geometry.Pair.PlayerColliderId))
-                    DrawPlayerCollider(playerColliderCount++, player, placement, worldToView, hitbox);
+                    DrawPlayerCollider(playerColliderCount++, player, placement, worldToView);
                 if (placement?.Box is { } box && drawnStructureColliders.Add(geometry.Pair.OtherColliderId))
                     DrawBox(boxCount++, box, placement, wireframeColor, worldToView);
                 if (placement?.Mesh is { } mesh && drawnStructureColliders.Add(geometry.Pair.OtherColliderId))
@@ -111,21 +110,21 @@ internal sealed partial class FlightHudView
             {
                 point = player.PointOnSurface(point) ?? player.PointOnSurface(impact.CenterWorld) ?? point;
                 if (impact.PlayerColliderId is { } id && drawnPlayerColliders.Add(id))
-                    DrawPlayerCollider(playerColliderCount++, player, impactPlacement, rotation, lastHitbox);
+                    DrawPlayerCollider(playerColliderCount++, player, impactPlacement, rotation);
             }
             DrawMarker(marker, patch, rotation * ToUnity(impactPlacement.Offset(point)), bodyToView,
                 StructureMaterial(broken.Key), measured: !impact.EstimatedContact);
-            marker.Span.enabled = false;
+            marker.Span.Enabled = false;
         }
 
         foreach (var (colliderId, geometry) in retainedPlayerColliders)
         {
             if (drawnPlayerColliders.Add(colliderId) && geometry.Placement is { Player: { } player } placement)
-                DrawPlayerCollider(playerColliderCount++, player, placement, LossRotation(placement, bodyToView), lastHitbox);
+                DrawPlayerCollider(playerColliderCount++, player, placement, LossRotation(placement, bodyToView));
         }
         if (playerReference is { Placement: { Player: { } capsule } reference } &&
             drawnPlayerColliders.Add(playerReference.ColliderId))
-            DrawPlayerCollider(playerColliderCount++, capsule, reference, worldToView, hitbox);
+            DrawPlayerCollider(playerColliderCount++, capsule, reference, worldToView);
 
         for (int i = boxCount; i < boxes.Count; i++)
             boxes[i].Root.gameObject.SetActive(false);
@@ -163,12 +162,12 @@ internal sealed partial class FlightHudView
             var position = worldToHud * ToUnity(placement.Offset(point));
             var marker = GetMarker(pool, count++, lost);
             DrawMarker(marker, patch, position, directionToHud, color, measured: true);
-            marker.Span.enabled = patch.Points.Length > 1;
-            if (marker.Span.enabled)
+            marker.Span.Enabled = patch.Points.Length > 1;
+            if (marker.Span.Enabled)
             {
                 var (start, end) = PatchSpan(patch.Points);
-                marker.Span.enabled = start != end;
-                marker.Span.sharedMaterial = color;
+                marker.Span.Enabled = start != end;
+                marker.Span.Material = color;
                 marker.Span.SetPosition(0, worldToHud * ToUnity(placement.Offset(start)) - position);
                 marker.Span.SetPosition(1, worldToHud * ToUnity(placement.Offset(end)) - position);
             }
@@ -181,12 +180,12 @@ internal sealed partial class FlightHudView
         if (index == boxes.Count)
         {
             var root = Child(anchor, "Structure box").transform;
-            var lines = new LineRenderer[FlightBoxPreview.Edges.Length];
+            var lines = new HudLine[FlightBoxPreview.Edges.Length];
             for (int i = 0; i < lines.Length; i++)
             {
                 var line = Line(root, "Box edge", color, 0.0016f, DrawOrder.Wireframe);
-                line.numCapVertices = 0;
-                line.positionCount = 2;
+                line.CapVertices = 0;
+                line.PositionCount = 2;
                 lines[i] = line;
             }
             boxes.Add(new BoxWidget(root, lines));
@@ -203,7 +202,7 @@ internal sealed partial class FlightHudView
             {
                 var (from, to) = FlightBoxPreview.Edges[i];
                 var line = widget.Edges[i];
-                line.sharedMaterial = color;
+                line.Material = color;
                 line.SetPosition(0, ToUnity(box.Corners[from] - box.Center) * HudContactPlacement.Scale);
                 line.SetPosition(1, ToUnity(box.Corners[to] - box.Center) * HudContactPlacement.Scale);
             }
@@ -211,27 +210,20 @@ internal sealed partial class FlightHudView
         widget.Root.gameObject.SetActive(true);
     }
 
-    private void DrawPlayerCollider(int index, HudPlayerCollider player, HudContactPlacement placement, Quaternion rotation,
-        Material color)
+    private void DrawPlayerCollider(int index, HudPlayerCollider player, HudContactPlacement placement, Quaternion rotation)
     {
         if (index == playerColliders.Count)
         {
             var root = Child(anchor, "Player collider").transform;
-            var front = Line(root, "Collider profile", color, 0.0017f, DrawOrder.Wireframe);
-            var side = Line(root, "Collider depth", color, 0.0011f, DrawOrder.Wireframe);
-            front.positionCount = side.positionCount = 2 * (CapsuleCapSteps + 1) + 1;
+            var front = Line(root, "Collider profile", hitbox, 0.0017f, DrawOrder.Wireframe);
+            var side = Line(root, "Collider depth", hitbox, 0.0011f, DrawOrder.Wireframe);
+            front.PositionCount = side.PositionCount = 2 * (CapsuleCapSteps + 1) + 1;
             playerColliders.Add(new PlayerWidget(root, front, side));
         }
 
         var widget = playerColliders[index];
         widget.Root.localPosition = rotation * ToUnity(placement.Offset(player.Center));
         widget.Root.localRotation = rotation * Quaternion.FromToRotation(Vector3.up, ToUnity(player.Axis));
-        if (widget.Color != color)
-        {
-            widget.Color = color;
-            widget.Front.sharedMaterial = color;
-            widget.Side.sharedMaterial = color;
-        }
         if (widget.HalfSpan != player.HalfSpan || widget.Radius != player.Radius)
         {
             widget.HalfSpan = player.HalfSpan;
@@ -249,7 +241,7 @@ internal sealed partial class FlightHudView
                 widget.Side.SetPosition(i, new Vector3(0, height, across));
                 widget.Side.SetPosition(opposite, new Vector3(0, -height, -across));
             }
-            int last = widget.Front.positionCount - 1;
+            int last = widget.Front.PositionCount - 1;
             widget.Front.SetPosition(last, new Vector3(radius, span, 0));
             widget.Side.SetPosition(last, new Vector3(0, span, radius));
         }
@@ -276,29 +268,29 @@ internal sealed partial class FlightHudView
                 if (i == widget.Lines.Count)
                 {
                     var created = Line(widget.Root, "Collider outline", color, width, DrawOrder.Wireframe);
-                    created.numCapVertices = 0;
+                    created.CapVertices = 0;
                     widget.Lines.Add(created);
                 }
 
                 var line = widget.Lines[i];
-                line.sharedMaterial = color;
+                line.Material = color;
                 if (mesh.Edges is { } edges)
                 {
-                    line.positionCount = 2;
+                    line.PositionCount = 2;
                     line.SetPosition(0, Point(edges[i].Start));
                     line.SetPosition(1, Point(edges[i].End));
                 }
                 else
                 {
                     var section = mesh.Sections![i];
-                    line.positionCount = section.Length;
+                    line.PositionCount = section.Length;
                     for (int j = 0; j < section.Length; j++)
                         line.SetPosition(j, Point(section[j]));
                 }
-                line.enabled = true;
+                line.Enabled = true;
             }
             for (int i = lineCount; i < widget.Lines.Count; i++)
-                widget.Lines[i].enabled = false;
+                widget.Lines[i].Enabled = false;
         }
         widget.Root.gameObject.SetActive(true);
 
