@@ -58,15 +58,18 @@ internal sealed record FlightHudFrame(
     {
         var match = item.Analysis?.Match;
         var description = DescribeBreak(match);
-        var contact = item.PlayerContact;
-        if (contact?.EstimatedContact == true)
-            description += "\nEstimated contact";
-        var normalSpeed = contact?.NormalMetersPerSecond ?? match?.Impact?.DisplayPoint?.ClosingMetersPerSecond;
-        if (normalSpeed is not { } speed)
-            return contact is { EstimatedContact: false } || match?.Impact is not null
-                ? description + "\nNormal speed unavailable" : description;
-        return description + FormattableString.Invariant($"\nNormal speed {speed:+0.0;-0.0;0.0} m/s") +
-            ((contact?.LinearEstimate ?? match?.Impact?.LinearEstimate) == true ? " (linear estimate)" : string.Empty);
+        if (match is not { Event: "player_hit", HitScore: { } hit })
+            return description;
+
+        string angle = hit.AngleDegrees is { } degrees ? FormattableString.Invariant($"{degrees:F0}°") : "Angle n/a";
+        string multiplier = hit.Multiplier is { } factor ? FormattableString.Invariant($"×{factor:F2}") : "×n/a";
+        string threshold = hit.Threshold is { } gate ? FormattableString.Invariant($" (>{gate:G})") : string.Empty;
+        string score = hit.Threshold is { } limit && hit.Score != limit && MathF.Round(hit.Score, 2) == limit
+            ? FormattableString.Invariant($"{hit.Score:G9}")
+            : FormattableString.Invariant($"{hit.Score:F2}");
+        return description +
+            FormattableString.Invariant($"\nStructure {hit.StructureSpeed:F1} m/s ×{hit.StructureTier} + you {hit.PlayerSpeed:F1} m/s") +
+            $"\n{angle} · {multiplier} · Score {score}{threshold}";
     }
 
     private static string DescribeBreak(BreakCandidate? match)

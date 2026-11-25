@@ -78,7 +78,8 @@ internal sealed class FlightBreakTimeline
         {
             var source = combat.LastOrDefault(row => row.Structure == key && row.Event == kind &&
                 row.CombatTimestamp == timestamp);
-            directPlayerCombat = Candidate(source ?? end with { Event = kind, Actor = localActor }, key, impactTick, delayedOldest);
+            var hit = source ?? end with { Event = kind, Actor = localActor };
+            directPlayerCombat = Candidate(hit with { HitScore = hit.HitScore ?? end.HitScore }, key, impactTick, delayedOldest);
         }
 
         bool complete = HasCompleteCollisionHistory(key, oldest);
@@ -209,7 +210,7 @@ internal sealed class FlightBreakTimeline
             structurePair ? counterpart : null, structurePair ? (breakingFirst ? combat.Detail : combat.StructureName) : null,
             combat.CombatTimestamp, combat.Combat, impact, linearSpeed, IronBoots: ironBoots, JumpDiagram: jumpDiagram,
             PlayerContact: playerContact, PlayerContactEstimate: structurePair ? null : combat.PlayerContactEstimate,
-            PlayerDamage: playerDamage);
+            PlayerDamage: playerDamage, HitScore: combat.HitScore);
     }
 
     private ContactObservation? MatchPlayerContact(StructureKey key, long tick, double oldest)

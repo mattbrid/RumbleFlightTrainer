@@ -99,11 +99,38 @@ internal sealed record GameplayObservation(
     string? Detail = null, long? CombatTimestamp = null,
     CombatMeasurement? Combat = null, BreakAnalysis? Break = null, long? CollisionSequence = null,
     IronBootsBreakEvidence? IronBoots = null, IronBootsApproach? JumpDiagram = null,
-    HudPlayerBreakContact? PlayerContactEstimate = null, string? PlayerCombatEvent = null) : TraceRecord(Stamp);
+    HudPlayerBreakContact? PlayerContactEstimate = null, string? PlayerCombatEvent = null,
+    PlayerHitScore? HitScore = null) : TraceRecord(Stamp);
 
 internal sealed record CombatVelocity(Vec3 Positional, Vec3 Angular);
 internal sealed record CombatMeasurement(CombatVelocity FirstStructure, CombatVelocity? SecondStructure = null,
     Vec3? CollisionPoint = null, CombatVelocity? PlayerPhysicsBody = null, CombatVelocity? PlayerVrBody = null);
+internal sealed record PlayerHitScore(float StructureSpeed, int StructureTier, float PlayerSpeed,
+    float? AngleDegrees, float? Multiplier, float Score, float? Threshold)
+{
+    public static PlayerHitScore? Measure(System.Numerics.Vector3 playerVelocity, System.Numerics.Vector3 structureVelocity,
+        int structureTier, float score, float? threshold)
+    {
+        float playerSpeed = playerVelocity.Length();
+        float structureSpeed = structureVelocity.Length();
+        float weightedSpeed = playerSpeed + structureTier * structureSpeed;
+        if (!float.IsFinite(weightedSpeed) || !float.IsFinite(score))
+            return null;
+
+        // The game uses a zero direction below Unity's normalization cutoff.
+        float? angle = null;
+        if (playerSpeed > 1e-5f && structureSpeed > 1e-5f)
+        {
+            float dot = System.Numerics.Vector3.Dot(playerVelocity / playerSpeed, structureVelocity / structureSpeed);
+            angle = MathF.Acos(Math.Clamp(dot, -1f, 1f)) * (180f / MathF.PI);
+        }
+
+        // Recover the multiplier from the game's own result.
+        float? multiplier = weightedSpeed == 0f ? (structureTier > 0 ? 0.5f : null) : score / weightedSpeed;
+        return new PlayerHitScore(structureSpeed, structureTier, playerSpeed, angle, multiplier, score, threshold);
+    }
+}
+
 internal sealed record CombatHealthObservation(TraceStamp Stamp, long? Tick, StructureKey Structure, string Event,
     long CombatTimestamp, short Before, short After) : TraceRecord(Stamp)
 {
@@ -156,7 +183,7 @@ internal sealed record BreakCandidate(TraceStamp Stamp, long? Tick, string Event
     BreakImpact? Impact, float? LinearImpactMetersPerSecond = null, string? Environment = null,
     IronBootsBreakEvidence? IronBoots = null, IronBootsApproach? JumpDiagram = null,
     HudPlayerBreakContact? PlayerContact = null, HudPlayerBreakContact? PlayerContactEstimate = null,
-    int? PlayerDamage = null, bool DelayedPlayerHit = false);
+    int? PlayerDamage = null, bool DelayedPlayerHit = false, PlayerHitScore? HitScore = null);
 
 internal sealed record BreakImpact(TraceStamp Stamp, long Tick, string Phase, int BreakingBodyId, int? CounterpartBodyId,
     int ReportedPointCount, double? BreakingSampleAgeSeconds, double? CounterpartSampleAgeSeconds,

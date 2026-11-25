@@ -1,6 +1,7 @@
 using HarmonyLib;
 using System.Reflection;
 using Il2CppRUMBLE.MoveSystem;
+using Il2CppRUMBLE.Players;
 using Il2CppRUMBLE.Players.Subsystems;
 using MelonLoader;
 using UnityEngine;
@@ -28,6 +29,10 @@ internal sealed class FlightGameHooks : IDisposable
         Patch(typeof(Structure), nameof(Structure.Kill), nameof(KillPrefix));
         Patch(typeof(HoldModifier), nameof(HoldModifier.Execute), nameof(HoldPrefix));
         Patch(typeof(FlickModifier), nameof(FlickModifier.Execute), nameof(FlickPrefix));
+        Patch(typeof(CombatManager), nameof(CombatManager.RegisterPlayerHitEvent), nameof(PlayerHitPrefix),
+            finalizer: nameof(PlayerHitFinalizer));
+        Patch(typeof(CombatManager), nameof(CombatManager.GetPjotrVelocityFactor), nameof(PlayerHitScorePostfix), postfix: true);
+        Patch(typeof(CombatManager), nameof(CombatManager.RegisterCombatEvent), nameof(RegisterCombatEventPrefix));
         Patch(typeof(HitRoutine), nameof(HitRoutine.MoveNext), nameof(HitHealthPrefix), finalizer: nameof(CombatHealthFinalizer));
         Patch(typeof(BelowRoutine), nameof(BelowRoutine.MoveNext), nameof(BelowHealthPrefix), finalizer: nameof(CombatHealthFinalizer));
         Patch(typeof(JumpRoutine), nameof(JumpRoutine.MoveNext), nameof(JumpHealthPrefix), finalizer: nameof(CombatHealthFinalizer));
@@ -83,6 +88,33 @@ internal sealed class FlightGameHooks : IDisposable
 
     private sealed record EnvironmentFrame(StructureTelemetry Owner, StructureTelemetry.EnvironmentCollision? Previous);
     private sealed record HealthFrame(StructureTelemetry Owner, StructureTelemetry.CombatHealthSample Sample);
+
+    private static void PlayerHitPrefix(Structure __0, Player __1, out StructureTelemetry.PlayerHitRegistration? __state)
+    {
+        StructureTelemetry.PlayerHitRegistration? registration = null;
+        if (Active is { } capture)
+            capture.Guard("player_hit_registration", () => registration = capture.BeginPlayerHitRegistration(__0, __1));
+        __state = registration;
+    }
+
+    private static Exception? PlayerHitFinalizer(Exception? __exception, StructureTelemetry.PlayerHitRegistration? __state)
+    {
+        if (__state is { } registration)
+            registration.Owner.EndPlayerHitRegistration(registration);
+        return __exception;
+    }
+
+    private static void PlayerHitScorePostfix(CombatManager __instance, Vector3 __0, int __1, Vector3 __2, int __3, float __result)
+    {
+        if (__1 == 0 && Active is { PlayerHitRegistrationActive: true } capture)
+            capture.Guard("player_hit_score", () => capture.ReadPlayerHitScore(__instance, __0, __2, __3, __result));
+    }
+
+    private static void RegisterCombatEventPrefix(ICombatEvent __0)
+    {
+        if (Active is { PlayerHitRegistrationActive: true } capture)
+            capture.Guard("player_hit_event_score", () => capture.MatchPlayerHitScore(__0));
+    }
 
     private static void HitHealthPrefix(HitRoutine __instance, out HealthFrame? __state) =>
         __state = BeginCombatHealth(capture => __instance.__4__this?.playerHitEvent is { } hit

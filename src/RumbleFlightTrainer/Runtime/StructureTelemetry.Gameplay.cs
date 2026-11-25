@@ -15,6 +15,47 @@ internal sealed partial class StructureTelemetry
     private bool combatManagerFailed;
     private bool combatListenerFailed;
     private CombatHealthSample? activeCombatHealth;
+    private PlayerHitRegistration? activeHitRegistration;
+
+    internal sealed record PlayerHitRegistration(StructureTelemetry Owner, Structure? Structure,
+        PlayerHitRegistration? Previous)
+    {
+        public PlayerHitScore? Score { get; set; }
+    }
+
+    public bool PlayerHitRegistrationActive => activeHitRegistration?.Structure is not null;
+
+    public PlayerHitRegistration? BeginPlayerHitRegistration(Structure structure, Player player)
+    {
+        Structure? localStructure = !disposed && player?.Controller == controller && structure != null ? structure : null;
+        if (localStructure == null && activeHitRegistration is null)
+            return null;
+        return activeHitRegistration = new PlayerHitRegistration(this, localStructure, activeHitRegistration);
+    }
+
+    public void EndPlayerHitRegistration(PlayerHitRegistration registration) => activeHitRegistration = registration.Previous;
+
+    public void ReadPlayerHitScore(CombatManager manager, Vector3 playerVelocity, Vector3 structureVelocity, int tier, float score)
+    {
+        if (activeHitRegistration is not { Structure: { } structure } registration)
+            return;
+        float threshold = manager.playerStructureVelocityFactorTreshold;
+        registration.Score = PlayerHitScore.Measure(FlightContactPatches.Vector(ToVec3(playerVelocity)),
+            FlightContactPatches.Vector(ToVec3(structureVelocity)), tier, score,
+            structure.BaseStructureTier > 0 && float.IsFinite(threshold) ? threshold : null);
+    }
+
+    public void MatchPlayerHitScore(ICombatEvent combat)
+    {
+        if (activeHitRegistration is not { Structure: { } structure, Score: { } score } ||
+            combat.TryCast<PlayerHitEvent>() is not { } hit || hit.Player?.Controller != controller ||
+            hit.StructureSnapshot?.Structure != structure || Promote(structure) is not { Destroyed: false } entry)
+            return;
+        entry.HitScore = (session.Segment, hit.Timestamp, score);
+    }
+
+    private PlayerHitScore? ReadStoredHitScore(Tracked? entry, int? timestamp) =>
+        entry?.HitScore is { } hit && hit.Segment == session.Segment && hit.Timestamp == timestamp ? hit.Score : null;
 
     public void OnFetch(Structure structure)
     {
@@ -74,7 +115,8 @@ internal sealed partial class StructureTelemetry
         var destruction = new GameplayObservation(default, null, "structure_destroyed",
             "Structure.onStructureDestroyed", null, entry.Key, entry.Name,
             CombatTimestamp: health?.CombatTimestamp, CollisionSequence: DirectEnvironmentImpact(entry.Key),
-            PlayerContactEstimate: health?.ContactEstimate, PlayerCombatEvent: health?.Event);
+            PlayerContactEstimate: health?.ContactEstimate, PlayerCombatEvent: health?.Event,
+            HitScore: health?.Event == "player_hit" ? ReadStoredHitScore(entry, health.CombatTimestamp) : null);
         session.CaptureGameplay(Time.frameCount, destruction);
         CloseContacts(entry.Key, "structure_destroyed");
     }
@@ -231,10 +273,12 @@ internal sealed partial class StructureTelemetry
         if (entry is not null && IsActive(entry))
             Guard("player_break_contact_estimate", () => contactEstimate = ReadHudBreakEstimate(entry, measurement));
 
+        var hitScore = kind == "player_hit" ? ReadStoredHitScore(entry, timestamp) : null;
         session.CaptureGameplay(Time.frameCount, new GameplayObservation(default, null, kind,
             "CombatManager.OnProcessCombatEvent", actor, knownKey,
             entry?.Name ?? snapshot.StructureName, CombatTimestamp: timestamp,
-            Combat: measurement, IronBoots: ironBoots, JumpDiagram: jumpDiagram, PlayerContactEstimate: contactEstimate));
+            Combat: measurement, IronBoots: ironBoots, JumpDiagram: jumpDiagram, PlayerContactEstimate: contactEstimate,
+            HitScore: hitScore));
     }
 
     private void RecordStructureCollision(StructureCollisionEvent collision, int timestamp)
