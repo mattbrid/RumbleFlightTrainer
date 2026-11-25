@@ -438,6 +438,9 @@ internal sealed partial class StructureTelemetry : IDisposable
     private void EndContact(ContactObservation last, string phase, string? reason)
     {
         ironBootsGate.End(last.Pair);
+        if (ironBootsTarget is { ContactEndedAt: null } target && target.Pair == last.Pair &&
+            target.Approach.Structure == last.Structure)
+            ironBootsTarget = target with { ContactEndedAt = session.ElapsedSeconds };
         session.CaptureContact(Time.frameCount, last with
         {
             Phase = phase, PairImpulseRaw = null, PlayerIsSecondInNativePair = null,

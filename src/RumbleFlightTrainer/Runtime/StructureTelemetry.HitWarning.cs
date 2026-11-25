@@ -17,7 +17,7 @@ internal sealed partial class StructureTelemetry
     private readonly record struct HudPlayerHitbox(Collider Collider, Bounds Bounds, Vector3 Position, Quaternion Rotation);
     private readonly record struct HudHitWarningContext(CombatManager Manager, Player Player, int CollisionMask,
         Vector3 VrVelocity, Vector3 BodyVelocity, Vector3 BodyAcceleration, float MinimumSpeed, float ScoreThreshold,
-        Vector3 PlayerCenter, float PullAcceleration);
+        Vector3 PlayerCenter, float PullForce);
 
     private void ResetHudHitWarnings(bool enabled)
     {
@@ -36,7 +36,7 @@ internal sealed partial class StructureTelemetry
                 hudTouchingKeys.Add(key);
     }
 
-    private HudHitWarningContext? ReadHudHitWarningContext(Vector3 playerCenter, float pullAcceleration)
+    private HudHitWarningContext? ReadHudHitWarningContext(Vector3 playerCenter, float pullForce)
     {
         try
         {
@@ -63,7 +63,7 @@ internal sealed partial class StructureTelemetry
             return hudHitboxes.Count == 0 ? null : new HudHitWarningContext(manager, player, system.CollisionMask.value,
                 vrBody.linearVelocity, body.linearVelocity, ReadHudGravity(body, controller.PlayerMovement.IsGrounded()),
                 manager.MinStructureSpeedForImpact,
-                manager.playerStructureVelocityFactorTreshold, playerCenter, pullAcceleration);
+                manager.playerStructureVelocityFactorTreshold, playerCenter, pullForce);
         }
         catch (Exception error)
         {
@@ -100,13 +100,13 @@ internal sealed partial class StructureTelemetry
                 grounded ? System.Numerics.Vector3.Zero : Numerics(angularVelocity),
                 bounds.extents.magnitude + (bounds.center - centerOfMass).magnitude, drive);
             if (TryWarn(motion, out var approach) ||
-                approach == HudHitApproach.GentleSupport || context.PullAcceleration <= 0f)
+                approach == HudHitApproach.GentleSupport || context.PullForce <= 0f)
                 return;
 
-            var pull = FlightHitWarningSweep.PullTowardPlayer(Numerics(context.PlayerCenter - centerOfMass),
-                context.PullAcceleration, grounded);
-            if (pull != System.Numerics.Vector3.Zero)
-                TryWarn(motion with { Acceleration = motion.Acceleration + pull }, out _);
+            var turn = HitWarningTurn.TowardPlayer(motion.Velocity, Numerics(context.PlayerCenter - centerOfMass),
+                context.PullForce, structureBody.mass, grounded);
+            if (turn.IsActive)
+                TryWarn(motion with { Turn = turn }, out _);
 
             bool TryWarn(HitWarningMotion candidate, out HudHitApproach projected)
             {
@@ -214,7 +214,8 @@ internal sealed partial class StructureTelemetry
                 // A gameplay trigger can already overlap before an ordinary hit is registered.
                 if (overlappingAtStart && Vector3.Dot(relativePointVelocity, normal) <= 0f)
                 {
-                    if (motion.Drive.Duration == 0f && Vector3.Dot(UnityVector(motion.Acceleration), normal) <= 0f)
+                    if (!motion.Turn.IsActive && motion.Drive.Duration == 0f &&
+                        Vector3.Dot(UnityVector(motion.Acceleration), normal) <= 0f)
                         break;
                     continue;
                 }

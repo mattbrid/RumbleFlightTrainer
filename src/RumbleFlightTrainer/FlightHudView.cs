@@ -93,7 +93,7 @@ internal sealed partial class FlightHudView : IDisposable
             }
 
             root.SetActive(true);
-            status = CreateHudLabel(anchor, "Contact status", 0.024f, new Vector2(32f, 8f), TextAlignmentOptions.Top);
+            status = CreateHudLabel(anchor, "Contact status", new Vector2(32f, 8f), TextAlignmentOptions.Top);
             status.transform.localPosition = new Vector3(0, -0.195f, -0.003f);
             root.SetActive(false);
         }
@@ -367,9 +367,9 @@ internal sealed partial class FlightHudView : IDisposable
             lines.Add("Contact data unavailable");
         if (frame.TouchingCount > 1)
         {
-            string counts = $"{frame.TouchingCount} touching · {frame.MeasuredCount} measured";
+            string counts = $"{frame.TouchingCount} touching, {frame.MeasuredCount} measured";
             if (branches.Length > 0 && frame.TouchingCount > LiveBranchLimit)
-                counts += $" · +{frame.TouchingCount - LiveBranchLimit} more";
+                counts += $", +{frame.TouchingCount - LiveBranchLimit} more";
             lines.Add(counts);
         }
 

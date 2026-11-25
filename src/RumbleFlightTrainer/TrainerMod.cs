@@ -21,10 +21,11 @@ public sealed class TrainerMod : MelonMod
     private bool showStructureVelocity;
     private bool showNormalSpeed;
     private bool showHitWarning;
-    private float hitWarningPullAcceleration;
+    private float hitWarningPullForce;
     private bool showNormalSpeedOnBreak;
     private bool showVelocityOnBreak;
     private float contactHoldSeconds;
+    private float ironBootsLastContactHoldSeconds;
     private float ironBootsVerticalVelocityThreshold;
     private System.Numerics.Vector3 hudOffset;
     private System.Numerics.Vector3 ironBootsHudOffset;
@@ -48,15 +49,19 @@ public sealed class TrainerMod : MelonMod
             description: "Draw live normal-speed arrows toward the player when closing and away when separating. Before contact, estimate speed from the gap.").Value;
         showHitWarning = preferences.CreateEntry("HudShowHitWarning", true,
             description: "Enable collision prediction and the red outline warning. False disables both.").Value;
-        float pull = preferences.CreateEntry("HudHitWarningPullAcceleration", FlightHitWarningSweep.DefaultPullAcceleration,
-            description: "Extra pull toward the player when predicting collisions, in m/s². Zero disables the extra pull.").Value;
-        hitWarningPullAcceleration = float.IsFinite(pull) ? MathF.Max(0f, pull) : FlightHitWarningSweep.DefaultPullAcceleration;
+        float pull = preferences.CreateEntry("HudHitWarningPullForce", FlightHitWarningSweep.DefaultPullForce,
+            description: "Sideways force toward the player for moving structures in the prediction, in newtons. Zero disables the extra bend.").Value;
+        hitWarningPullForce = float.IsFinite(pull) ? MathF.Max(0f, pull) : FlightHitWarningSweep.DefaultPullForce;
         showNormalSpeedOnBreak = preferences.CreateEntry("HudShowNormalSpeedOnBreak", true,
             description: "Draw an arrow along the contact normal on retained breaks. The sign of normal speed sets its direction.").Value;
         showVelocityOnBreak = preferences.CreateEntry("HudShowVelocityOnBreak", false,
             description: "Show the frozen relative velocity arrow on retained breaks.").Value;
         contactHoldSeconds = preferences.CreateEntry("HudContactHoldSeconds", FlightHudState.DefaultContactHoldSeconds,
             description: "Seconds to hold lost contacts and break reports. Zero hides retained contacts.").Value;
+        float ironBootsHold = preferences.CreateEntry("IronBootsLastContactHoldSeconds", IronBootsDisplay.DefaultLastContactHoldSeconds,
+            description: "Seconds to show the Iron Boots diagram after contact ends. Zero hides the retained diagram.").Value;
+        ironBootsLastContactHoldSeconds = float.IsFinite(ironBootsHold) && ironBootsHold >= 0f
+            ? ironBootsHold : IronBootsDisplay.DefaultLastContactHoldSeconds;
         float threshold = preferences.CreateEntry("IronBootsVerticalVelocityThreshold",
             IronBootsContactGate.DefaultVerticalVelocityThreshold,
             description: "Show Iron Boots feedback during foot contact while the VR body's vertical velocity in m/s is below this value. Negative means downward.").Value;
@@ -140,8 +145,9 @@ public sealed class TrainerMod : MelonMod
 
             var telemetry = active.Telemetry;
             var nearby = telemetry?.ReadNearbyHudStructures(showStructureVelocity, showNormalSpeed,
-                showHitWarning, hitWarningPullAcceleration);
-            var frame = hud.Read(active.Observations.ElapsedSeconds, nearby?.Geometry);
+                showHitWarning, hitWarningPullForce);
+            double now = active.Observations.ElapsedSeconds;
+            var frame = hud.Read(now, nearby?.Geometry);
             var vr = active.Controller.PlayerVR;
             Transform? headset = active.Origin == null || vr == null ? null : vr.Headset?.Transform;
             if (headset == null)
@@ -154,7 +160,7 @@ public sealed class TrainerMod : MelonMod
                 showVelocityOnBreak, showNormalSpeedOnBreak);
             var playerReference = frame.Structures.Length > 0 || frame.Breaks.Any(broken => broken.PlayerContact?.Placement is not null)
                 ? telemetry?.ReadHudPlayerReference() : null;
-            var ironBoots = map.name == Gym ? telemetry?.ReadIronBoots(active.Origin) : null;
+            var ironBoots = map.name == Gym ? telemetry?.ReadIronBoots(active.Origin, now, ironBootsLastContactHoldSeconds) : null;
             view.Draw(headset, frame, playerReference, hudOffset, ironBootsHudOffset, ironBoots, nearby?.Velocities, nearby?.HitWarnings);
         }
         catch (Exception error)

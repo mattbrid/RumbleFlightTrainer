@@ -5,17 +5,8 @@ namespace RumbleFlightTrainer;
 internal static class FlightHitWarningSweep
 {
     public const float LookAheadSeconds = 0.35f;
-    public const float DefaultPullAcceleration = 2f;
+    public const float DefaultPullForce = 300f;
     public const float SupportNormalY = 0.65f;
-
-    public static Vector3 PullTowardPlayer(Vector3 toPlayer, float strength, bool grounded)
-    {
-        if (grounded)
-            toPlayer.Y = 0f;
-        float distance = toPlayer.Length();
-        return distance > 1e-4f && float.IsFinite(distance) && float.IsFinite(strength) && strength > 0f
-            ? toPlayer / distance * strength : Vector3.Zero;
-    }
 
     public static bool IsGentleSupport(Vector3 normalTowardPlayer, Vector3 relativePointVelocity) =>
         normalTowardPlayer.Y >= SupportNormalY && relativePointVelocity.LengthSquared() <= 1.75f * 1.75f &&
@@ -46,6 +37,75 @@ internal static class FlightHitWarningSweep
     }
 }
 
+internal readonly record struct HitWarningTurn(Vector3 Forward, Vector3 Sideways, float Speed, float Rate, float AngleLimit)
+{
+    private const float MinimumSpeed = 0.5f;
+    public bool IsActive => Rate > 0f;
+
+    public static HitWarningTurn TowardPlayer(Vector3 velocity, Vector3 toPlayer, float force, float mass, bool grounded)
+    {
+        if (force <= 0f || mass <= 0f || !float.IsFinite(force) || !float.IsFinite(mass))
+            return default;
+        if (grounded)
+        {
+            velocity.Y = 0f;
+            toPlayer.Y = 0f;
+        }
+        float speed = velocity.Length();
+        if (speed < MinimumSpeed || !float.IsFinite(speed))
+            return default;
+
+        var forward = velocity / speed;
+        float along = Vector3.Dot(toPlayer, forward);
+        var sideways = toPlayer - along * forward;
+        float distance = sideways.Length();
+        float rate = force / mass / speed;
+        if (distance <= 1e-4f || !float.IsFinite(distance) || rate <= 0f || !float.IsFinite(rate))
+            return default;
+
+        // Stop once the original bearing to the player is reached, or after a quarter turn.
+        return new HitWarningTurn(forward, sideways / distance, speed, rate, MathF.Atan2(distance, MathF.Max(0f, along)));
+    }
+
+    public Vector3 VelocityChange(float seconds)
+    {
+        if (!IsActive)
+            return Vector3.Zero;
+        float angle = MathF.Min(seconds * Rate, AngleLimit);
+        float halfSine = MathF.Sin(angle * 0.5f);
+        return Speed * (MathF.Sin(angle) * Sideways - 2f * halfSine * halfSine * Forward);
+    }
+
+    public Vector3 Displacement(float seconds)
+    {
+        var (forward, sideways) = DisplacementComponents(seconds);
+        return forward * Forward + sideways * Sideways;
+    }
+
+    public Vector3 DisplacementBound(float seconds)
+    {
+        var (forward, sideways) = DisplacementComponents(seconds);
+        // The two terms can cancel along a world axis. Bound each before adding.
+        return MathF.Abs(forward) * Vector3.Abs(Forward) + sideways * Vector3.Abs(Sideways);
+    }
+
+    private (float Forward, float Sideways) DisplacementComponents(float seconds)
+    {
+        if (!IsActive || seconds <= 0f)
+            return default;
+        float turnTime = MathF.Min(seconds, AngleLimit / Rate);
+        float angle = turnTime * Rate;
+        if (angle <= 0f)
+            return default;
+        float sine = MathF.Sin(angle);
+        float halfSine = MathF.Sin(angle * 0.5f);
+        float distance = Speed * turnTime;
+        float coastDistance = Speed * (seconds - turnTime);
+        return (distance * (sine / angle - 1f) - coastDistance * (2f * halfSine * halfSine),
+            distance * (2f * halfSine * (halfSine / angle)) + coastDistance * sine);
+    }
+}
+
 internal readonly record struct HitWarningDrive(Vector3 Acceleration, float Duration)
 {
     public static HitWarningDrive Forecast(Vector3 changePerStep, float step, bool queued, bool repeating)
@@ -67,12 +127,13 @@ internal readonly record struct HitWarningDrive(Vector3 Acceleration, float Dura
 }
 
 internal readonly record struct HitWarningMotion(Vector3 Velocity, Vector3 Acceleration, Vector3 AngularVelocity,
-    float RotationRadius, HitWarningDrive Drive = default)
+    float RotationRadius, HitWarningDrive Drive = default, HitWarningTurn Turn = default)
 {
     public Vector3 Displacement(float seconds) => seconds * (Velocity + 0.5f * seconds * Acceleration) +
-        Drive.Displacement(seconds);
+        Drive.Displacement(seconds) + Turn.Displacement(seconds);
 
-    public Vector3 VelocityAt(float seconds) => Velocity + seconds * Acceleration + Drive.VelocityChange(seconds);
+    public Vector3 VelocityAt(float seconds) => Velocity + seconds * Acceleration + Drive.VelocityChange(seconds) +
+        Turn.VelocityChange(seconds);
 
     public HitWarningMotion RelativeTo(Vector3 velocity, Vector3 acceleration) =>
         this with { Velocity = Velocity - velocity, Acceleration = Acceleration - acceleration };
@@ -90,7 +151,7 @@ internal readonly record struct HitWarningMotion(Vector3 Velocity, Vector3 Accel
         float angle = MathF.Min(MathF.PI, AngularVelocity.Length() * horizon);
         float rotationMargin = 2f * RotationRadius * MathF.Sin(angle * 0.5f);
         var margin = Vector3.Abs(0.5f * horizon * horizon * Acceleration) +
-            Vector3.Abs(Drive.Displacement(horizon)) + new Vector3(rotationMargin);
+            Vector3.Abs(Drive.Displacement(horizon)) + Turn.DisplacementBound(horizon) + new Vector3(rotationMargin);
         if (Velocity.LengthSquared() > 1e-8f || margin.LengthSquared() > 1e-8f)
             return FlightHitWarningSweep.TryOverlapWindow(offset, combinedExtents + margin, Velocity, out enter, out exit, horizon);
         enter = exit = 0f;

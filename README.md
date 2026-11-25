@@ -13,15 +13,16 @@ With the game closed, edit `[RumbleFlightTrainer]` in `UserData/MelonPreferences
 | Setting | Default | Effect |
 | --- | --- | --- |
 | `HudEnabledOnStartup` | `true` | Set to `false` to start with the HUD off. |
-| `HudContactHoldSeconds` | `3.0` | How long to keep lost-contact markers and break reports. `0` hides them. |
+| `HudContactHoldSeconds` | `5.0` | Seconds to keep lost-contact markers and break reports. `0` hides them. |
 | `HudShowNormalSpeed` | `true` | Show live normal-speed arrows on nearby structures. |
 | `HudShowHitWarning` | `true` | Show a red outline for predicted hits. |
-| `HudHitWarningPullAcceleration` | `2.0` | Extra pull toward you in the prediction, in m/s². `0.0` disables the extra pull. |
+| `HudHitWarningPullForce` | `300.0` | Sideways force toward you in the prediction, in newtons. `0.0` disables the extra bend. |
 | `HudShowNormalSpeedOnBreak` | `true` | Show the frozen normal-speed arrow on retained impacts. |
 | `HudShowStructureVelocity` | `false` | Show live relative velocity arrows. |
 | `HudShowVelocityOnBreak` | `false` | Show the frozen relative velocity arrow on retained impacts. |
 | `HudShowPerStructureImpulse` | `false` | Show gravity and the strongest individual contact impulses as separate arrows. |
 | `IronBootsVerticalVelocityThreshold` | `1.0` | Show Iron Boots feedback below this vertical speed, in m/s. Negative means downward. |
+| `IronBootsLastContactHoldSeconds` | `5.0` | Seconds to keep the Iron Boots **Last contact** diagram. `0` hides the retained diagram. |
 
 Use `HudOffsetX`, `HudOffsetY`, and `HudOffsetZ` for the main HUD (defaults `0.0, 0.0, 0.0`). Use `IronBootsHudOffsetX`, `IronBootsHudOffsetY`, and `IronBootsHudOffsetZ` for the Iron Boots panel (defaults `0.31, 0.035, 0.0`). Positive offsets move the panel right, up, or farther away, respectively, in metres from the main HUD's unadjusted position.
 
@@ -37,11 +38,11 @@ The mint arrow combines measured structure contact and airborne gravity over fou
 
 ## Predicted hits
 
-A red outline warns of a possible hit within the next 0.35 seconds. The trainer accounts for gravity, spin, and observed Hold and Flick inputs when projecting nearby structures' paths. If the projected path misses, the trainer can also test a path with extra pull toward you. `HudHitWarningPullAcceleration` controls that allowance in the prediction. The preview skips structures already touching you and filters out gentle approaches from below.
+A red outline warns of a possible hit within the next 0.35 seconds. The trainer accounts for gravity, spin, and observed Hold and Flick inputs when projecting nearby structures' paths. If the first path gives no warning, the trainer can also test a path bent sideways toward you. The same `HudHitWarningPullForce` bends lighter structures more. The bend preserves speed and starts only when the structure is already moving. The preview skips structures already touching you and filters out gentle approaches from below.
 
 ## Break reports
 
-After contact ends, the HUD holds the last point on the player hitbox for three seconds by default. When a structure breaks and the HUD has its player contact, it can also retain the dashed outline and motion arrows at the captured pose. The trainer uses callbacks from the destruction step and can use the initial contact when the game processes a hit shortly afterward.
+After contact ends, the HUD holds the last point on the player hitbox for five seconds by default. When a structure breaks and the HUD has its player contact, it can also retain the dashed outline and motion arrows at the captured pose. The trainer uses callbacks from the destruction step and can use the initial contact when the game processes a hit shortly afterward.
 
 At impact, **Normal speed** is the relative velocity projected onto Unity's unit normal at the selected collider contact point. The retained arrow follows the normal for positive speed and reverses for negative speed. Its length grows with the absolute value. Positive values mean closing, negative values mean separating, and a fast graze can be near zero. The impact calculation includes rotation when both bodies have usable samples. If either sample is missing, the HUD can use the callback's relative linear velocity with its measured contact normal. When a player hit supplies an estimated contact, the trainer uses the collider surface or overlap direction when available. Estimated arrows use a dimmer color. Live arrows use linear velocity. Before contact, the gap between the colliders supplies an estimated normal for the speed calculation.
 
@@ -49,8 +50,8 @@ The report uses the game's local combat routine when it directly encloses destru
 
 ## Iron Boots
 
-In the **Gym**, the Iron Boots diagram appears during foot contact with a box-shaped structure whenever the VR body's vertical velocity is below `IronBootsVerticalVelocityThreshold` (default **+1.0 m/s**). The trainer rechecks velocity each physics tick, so the diagram can appear while you're still rising slowly and can hide again during the same ride. It cuts the box and player colliders in the same plane and marks the measured contact on the box's edge. The rays start at the game's feet position. The arc turns green when both directional cutoffs pass and coral when either fails. If the diagram is visible when contact ends, **Last contact** holds it until the next structure contact or a HUD reset.
+In the **Gym**, the Iron Boots diagram appears during foot contact with a box-shaped structure whenever the VR body's vertical velocity is below `IronBootsVerticalVelocityThreshold` (default **+1.0 m/s**). The trainer rechecks velocity each physics tick, so the diagram can appear while you're still rising slowly and can hide again during the same ride. It cuts the box and player colliders in the same plane and marks the measured contact on the box's edge. The rays start at the game's feet position. The arc turns green when both directional cutoffs pass and coral when either fails. If the diagram is visible when contact ends, **Last contact** holds it for five seconds by default. The next structure contact or a HUD reset clears it sooner.
 
-A matching jump and break can report **Iron Boots (45°)** when the directional checks pass and the jump leaves your health unchanged. A damaging hit supports **hit you**. When the trainer lacks a health reading for a matching jump, relative speed below 2.0 m/s shows **Iron Boots (45°)** and speeds at or above 2.0 m/s show **Iron Boots? (45°)**. The next structure contact clears the separate Iron Boots diagram. The main break report uses the contact hold timer.
+A matching jump and break can report **Iron Boots (45 deg)** when the directional checks pass and the jump leaves your health unchanged. A damaging hit supports **hit you**. When the trainer lacks a health reading for a matching jump, relative speed below 2.0 m/s shows **Iron Boots (45 deg)** and speeds at or above 2.0 m/s show **Iron Boots? (45 deg)**. The main break report uses `HudContactHoldSeconds`.
 
 Existing Iron Boots offsets are converted once to preserve placement.

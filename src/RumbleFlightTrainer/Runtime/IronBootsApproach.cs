@@ -124,8 +124,12 @@ internal sealed class IronBootsContactGate
 
 internal readonly record struct IronBootsDisplay(IronBootsApproach Sample, bool Retained)
 {
-    public static IronBootsDisplay? Read(IronBootsApproach sample, int segment, bool active) =>
-        sample.Segment == segment ? new IronBootsDisplay(sample, !active) : null;
+    public const float DefaultLastContactHoldSeconds = 5f;
+
+    public static IronBootsDisplay? Read(IronBootsApproach sample, int segment, double now, double? contactEndedAt,
+        double holdSeconds = DefaultLastContactHoldSeconds) =>
+        sample.Segment != segment || contactEndedAt is { } ended && now >= ended + holdSeconds
+            ? null : new IronBootsDisplay(sample, contactEndedAt.HasValue);
 
     public static IronBootsApproach? AfterBreak(GameplayObservation destruction, IronBootsApproach? current)
     {

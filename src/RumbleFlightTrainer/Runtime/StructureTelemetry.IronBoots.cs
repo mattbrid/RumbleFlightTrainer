@@ -12,7 +12,7 @@ internal sealed partial class StructureTelemetry
     private IronBootsTarget? ironBootsTarget;
 
     private sealed record IronBootsTarget(Structure? Structure, ContactKey? Pair, bool FootContact,
-        Rigidbody? VrBody, Transform TrackingOrigin, IronBootsApproach Approach, bool ShowOnLoss);
+        Rigidbody? VrBody, Transform TrackingOrigin, IronBootsApproach Approach, bool ShowOnLoss, double? ContactEndedAt = null);
 
     private IronBootsBreakEvidence? MeasureIronBootsBreak(Tracked entry, CombatMeasurement motion,
         out IronBootsApproach? jumpDiagram)
@@ -138,7 +138,7 @@ internal sealed partial class StructureTelemetry
         session.StartIronBootsContact(Time.frameCount);
     }
 
-    public IronBootsDisplay? ReadIronBoots(Transform? trackingOrigin)
+    public IronBootsDisplay? ReadIronBoots(Transform? trackingOrigin, double now, double holdSeconds)
     {
         try
         {
@@ -149,16 +149,18 @@ internal sealed partial class StructureTelemetry
             if (physics == null || physics.VRrigidbody != target.VrBody)
                 return null;
 
-            bool active = IsIronBootsContactActive(target);
-            bool visible = target.ShowOnLoss;
-            if (active)
+            if (IsIronBootsContactActive(target))
             {
-                visible = ironBootsGate.Allows(target.Approach.Structure,
+                bool visible = ironBootsGate.Allows(target.Approach.Structure,
                     ReadIronBootsVerticalVelocity(target.VrBody, session.LastPhysicsTick));
-                if (visible != target.ShowOnLoss)
-                    ironBootsTarget = target with { ShowOnLoss = visible };
+                if (visible != target.ShowOnLoss || target.ContactEndedAt.HasValue)
+                    ironBootsTarget = target = target with { ShowOnLoss = visible, ContactEndedAt = null };
             }
-            return visible ? IronBootsDisplay.Read(target.Approach, session.Segment, active) : null;
+            else if (!target.ContactEndedAt.HasValue)
+                ironBootsTarget = target = target with { ContactEndedAt = now };
+
+            return target.ShowOnLoss
+                ? IronBootsDisplay.Read(target.Approach, session.Segment, now, target.ContactEndedAt, holdSeconds) : null;
         }
         catch (Exception error)
         {
@@ -172,7 +174,8 @@ internal sealed partial class StructureTelemetry
         if (!ironBootsEnabled)
             return;
 
-        var previous = ironBootsTarget?.Approach;
+        var previousTarget = ironBootsTarget;
+        var previous = previousTarget?.Approach;
         var sample = IronBootsDisplay.AfterBreak(destruction, previous);
         if (ReferenceEquals(sample, previous))
             return;
@@ -180,7 +183,12 @@ internal sealed partial class StructureTelemetry
         ironBootsTarget = null;
         var origin = controller.PlayerVR?.Origin;
         if (sample is not null && origin != null)
-            ironBootsTarget = new IronBootsTarget(null, null, false, controller.PlayerPhysics?.VRrigidbody, origin, sample, true);
+        {
+            double endedAt = previous?.Structure == sample.Structure && previousTarget?.ContactEndedAt is { } previousEnd
+                ? previousEnd : destruction.Stamp.TimeSeconds;
+            ironBootsTarget = new IronBootsTarget(null, null, false, controller.PlayerPhysics?.VRrigidbody,
+                origin, sample, true, endedAt);
+        }
     }
 
     private bool IsIronBootsContactActive(IronBootsTarget target)

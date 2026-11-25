@@ -23,7 +23,7 @@ internal sealed partial class StructureTelemetry
 
     public (IReadOnlyDictionary<StructureKey, List<HudNearbyCollider>> Geometry,
         IReadOnlyDictionary<StructureKey, HudStructureVelocity> Velocities, IReadOnlySet<StructureKey> HitWarnings)
-        ReadNearbyHudStructures(bool showVelocity, bool showNormal, bool showHitWarning, float hitWarningPullAcceleration)
+        ReadNearbyHudStructures(bool showVelocity, bool showNormal, bool showHitWarning, float hitWarningPullForce)
     {
         hudNearby.Clear();
         hudVelocities.Clear();
@@ -110,7 +110,7 @@ internal sealed partial class StructureTelemetry
             if (!warningContextRead)
             {
                 warningContextRead = true;
-                hitWarning = ReadHudHitWarningContext(center, hitWarningPullAcceleration);
+                hitWarning = ReadHudHitWarningContext(center, hitWarningPullForce);
             }
             if (hitWarning is { } context)
                 AddHudHitWarning(key, structure, collider, context);

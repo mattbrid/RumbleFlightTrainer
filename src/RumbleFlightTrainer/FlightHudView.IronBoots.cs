@@ -69,7 +69,7 @@ internal sealed partial class FlightHudView
             panel.Arc.Material = aligned ? panel.Aligned : panel.Unaligned;
             panel.Angle.color = Color.Lerp(aligned ? AlignedAngle : UnalignedAngle, Color.white, 0.30f);
             panel.Angle.text = approach.Alignment is { } alignment
-                ? FormattableString.Invariant($"{alignment.AngleDegrees:F0}°") : string.Empty;
+                ? FormattableString.Invariant($"{alignment.AngleDegrees:F0} deg") : string.Empty;
             panel.Angle.transform.localPosition = DiagramPoint(diagram.AngleLabel) + Vector3.back * 0.004f;
 
             int fallback = (int)(unchecked((uint)approach.Structure.PoolGeneration) % StructureColors.Length);
@@ -106,8 +106,8 @@ internal sealed partial class FlightHudView
         var unaligned = ColorMaterial(hitbox.shader, UnalignedAngle);
         var arc = Line(transform, "Approach angle arc", aligned, 0.0018f, DrawOrder.LiveFace);
 
-        var angle = CreateHudLabel(transform, "Approach angle", 0.024f, new Vector2(8f, 4f), TextAlignmentOptions.Center);
-        var last = CreateHudLabel(transform, "Last contact", 0.017f, new Vector2(28f, 4f), TextAlignmentOptions.Center);
+        var angle = CreateHudLabel(transform, "Approach angle", new Vector2(8f, 4f), TextAlignmentOptions.Center);
+        var last = CreateHudLabel(transform, "Last contact", new Vector2(28f, 4f), TextAlignmentOptions.Center);
         last.transform.localPosition = new Vector3(0, 0.095f, -0.004f);
         last.gameObject.SetActive(false);
         return new IronBootsPanel(panel, box, player, foot, velocity, arrowhead, ray, origin, feet, contact, arc,

@@ -50,7 +50,7 @@ internal sealed record FlightHudFrame(
                 return null;
             if (last.Break is { } broken)
                 return FormatBreak(broken);
-            return last.Kind == HudLossKind.SignalLost ? "Lost Contact · signal interrupted" : "Lost Contact";
+            return last.Kind == HudLossKind.SignalLost ? "Lost Contact, signal interrupted" : "Lost Contact";
         }
     }
 
@@ -61,23 +61,23 @@ internal sealed record FlightHudFrame(
         if (match is not { Event: "player_hit", HitScore: { } hit })
             return description;
 
-        string angle = hit.AngleDegrees is { } degrees ? FormattableString.Invariant($"{degrees:F0}°") : "Angle n/a";
-        string multiplier = hit.Multiplier is { } factor ? FormattableString.Invariant($"×{factor:F2}") : "×n/a";
+        string angle = hit.AngleDegrees is { } degrees ? FormattableString.Invariant($"{degrees:F0} deg") : "Angle n/a";
+        string multiplier = hit.Multiplier is { } factor ? FormattableString.Invariant($"x{factor:F2}") : "Multiplier n/a";
         string threshold = hit.Threshold is { } gate ? FormattableString.Invariant($" (>{gate:G})") : string.Empty;
         string score = hit.Threshold is { } limit && hit.Score != limit && MathF.Round(hit.Score, 2) == limit
             ? FormattableString.Invariant($"{hit.Score:G9}")
             : FormattableString.Invariant($"{hit.Score:F2}");
         return description +
-            FormattableString.Invariant($"\nStructure {hit.StructureSpeed:F1} m/s ×{hit.StructureTier} + you {hit.PlayerSpeed:F1} m/s") +
-            $"\n{angle} · {multiplier} · Score {score}{threshold}";
+            FormattableString.Invariant($"\nTier {hit.StructureTier}x {hit.StructureSpeed:F1} m/s + you {hit.PlayerSpeed:F1} m/s") +
+            $"\n{angle}, {multiplier}, Score {score}{threshold}";
     }
 
     private static string DescribeBreak(BreakCandidate? match)
     {
         if (match?.IronBoots is { } boots)
             return boots.IsLowRelativeSpeed || match.PlayerDamage == 0
-                ? FormattableString.Invariant($"Structure Broke · Iron Boots ({boots.Alignment.AngleDegrees:F0}°)")
-                : FormattableString.Invariant($"Structure Broke · Iron Boots? ({boots.Alignment.AngleDegrees:F0}°)");
+                ? FormattableString.Invariant($"Structure Broke, Iron Boots ({boots.Alignment.AngleDegrees:F0} deg)")
+                : FormattableString.Invariant($"Structure Broke, Iron Boots? ({boots.Alignment.AngleDegrees:F0} deg)");
 
         string cause = match?.Event switch
         {
@@ -89,7 +89,7 @@ internal sealed record FlightHudFrame(
             "environment_collision" => $"hit {match.Environment}",
             _ => "cause unknown"
         };
-        return $"Structure Broke · {cause}";
+        return $"Structure Broke, {cause}";
     }
 }
 
@@ -97,7 +97,7 @@ internal sealed class FlightHudState
 {
     private const int ImpulseWindowTicks = 4;
     private const float CapsuleSupportFraction = 0.25f;
-    internal const float DefaultContactHoldSeconds = 3f;
+    internal const float DefaultContactHoldSeconds = 5f;
 
     private readonly int physicsBodyId;
     private readonly double contactHoldSeconds;
